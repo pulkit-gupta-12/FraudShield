@@ -45,7 +45,11 @@ export function StatCard({
         <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">{title}</p>
         {icon && (
           <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center shrink-0', colorStyles[color])}>
-            {icon}
+            {React.isValidElement(icon)
+              ? icon
+              : typeof icon === 'function' || (typeof icon === 'object' && icon != null)
+              ? React.createElement(icon, { className: 'w-5 h-5' })
+              : icon}
           </div>
         )}
       </div>

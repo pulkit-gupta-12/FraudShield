@@ -56,6 +56,9 @@ export function Modal({
 
       {/* Modal Dialog Box */}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title || 'Modal dialog'}
         className={clsx(
           'relative w-full bg-white rounded-2xl shadow-2xl border border-neutral-200 overflow-hidden z-10 animate-in fade-in zoom-in-95 duration-150',
           sizeClasses[size],

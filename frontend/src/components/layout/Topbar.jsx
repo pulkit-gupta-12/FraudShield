@@ -11,33 +11,48 @@ import {
   CheckCheck,
   Shield,
   Layers,
+  FlaskConical,
 } from 'lucide-react'
 import { useAuth, getRoleDashboardPath } from '../../context/AuthContext.jsx'
 import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../../services/notifications.js'
 import { formatRelativeTime } from '../../utils/format.js'
 import toast from 'react-hot-toast'
 
+// Show a "Demo data" chip in the top bar when running in mock mode
+const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+
 export function Topbar({ onMenuClick }) {
   const { user, logout } = useAuth()
-  const location = useLocation()
-  const navigate = useNavigate()
+  const location  = useLocation()
+  const navigate  = useNavigate()
 
-  const [notifications, setNotifications] = useState([])
+  const [notifications, setNotifications]       = useState([])
+  const [notifCount, setNotifCount]             = useState(0)
   const [showNotifications, setShowNotifications] = useState(false)
-  const [showUserMenu, setShowUserMenu] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [showUserMenu, setShowUserMenu]         = useState(false)
+  const [searchQuery, setSearchQuery]           = useState('')
 
   const notifRef = useRef(null)
-  const userRef = useRef(null)
+  const userRef  = useRef(null)
 
   useEffect(() => {
     let isMounted = true
-    getNotifications().then((data) => {
-      if (isMounted) setNotifications(data)
-    })
-    return () => {
-      isMounted = false
-    }
+    getNotifications({ pageSize: 50 })
+      .then((data) => {
+        if (!isMounted) return
+        // Handle both shapes: array (legacy) and { results, count } (new)
+        if (Array.isArray(data)) {
+          setNotifications(data)
+          setNotifCount(data.length)
+        } else {
+          setNotifications(data.results ?? [])
+          setNotifCount(data.count ?? 0)
+        }
+      })
+      .catch(() => {
+        // Silently fail – notifications are non-critical
+      })
+    return () => { isMounted = false }
   }, [])
 
   // Close dropdowns on outside click
@@ -78,8 +93,8 @@ export function Topbar({ onMenuClick }) {
 
   // Generate breadcrumb items from URL
   const pathSegments = location.pathname.split('/').filter(Boolean)
-  const breadcrumbs = pathSegments.map((segment, idx) => {
-    const path = `/${pathSegments.slice(0, idx + 1).join('/')}`
+  const breadcrumbs  = pathSegments.map((segment, idx) => {
+    const path  = `/${pathSegments.slice(0, idx + 1).join('/')}`
     const label = segment.charAt(0).toUpperCase() + segment.slice(1)
     return { path, label }
   })
@@ -117,8 +132,8 @@ export function Topbar({ onMenuClick }) {
       </div>
 
       {/* Center: Search input */}
-      <div className="flex-1 max-w-md mx-2 sm:mx-6">
-        <div className="relative">
+      <div className="flex-1 max-w-md mx-2 sm:mx-6 flex items-center gap-3">
+        <div className="relative flex-1">
           <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-2.5 pointer-events-none" />
           <input
             type="text"
@@ -128,6 +143,17 @@ export function Topbar({ onMenuClick }) {
             className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl bg-neutral-100 border border-transparent focus:bg-white focus:border-neutral-300 focus:outline-none focus:ring-2 focus:ring-primary-500/20 transition"
           />
         </div>
+
+        {/* Demo data chip — only shown when VITE_USE_MOCK=true */}
+        {IS_MOCK && (
+          <span
+            title="Running with mock / demo data. Set VITE_USE_MOCK=false to connect to the real backend."
+            className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap cursor-default select-none"
+          >
+            <FlaskConical className="w-3 h-3" />
+            Demo data
+          </span>
+        )}
       </div>
 
       {/* Right: Notifications & User profile menu */}

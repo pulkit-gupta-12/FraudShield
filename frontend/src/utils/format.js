@@ -10,6 +10,8 @@ export function formatCurrencyINR(amount) {
   }).format(amount)
 }
 
+export const formatCurrency = formatCurrencyINR
+
 /**
  * Formats ISO date to readable string
  */
@@ -26,6 +28,8 @@ export function formatDate(isoString, includeTime = true) {
   }
   return new Intl.DateTimeFormat('en-IN', options).format(date)
 }
+
+export const formatDateTime = (isoString) => formatDate(isoString, true)
 
 /**
  * Formats relative time (e.g. 5m ago, 2h ago)

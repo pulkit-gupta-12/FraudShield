@@ -27,8 +27,10 @@ class MockStore {
     this.notifications = generateNotifications()
     this.modelInfo = JSON.parse(JSON.stringify(MODEL_INFO))
     this.config = {
-      suspiciousThreshold: 0.40,
-      fraudThreshold: 0.70,
+      suspiciousThreshold: 0.5,
+      fraudThreshold: 0.89,
+      reviewFloor: 0.5,
+      threshold: 0.89,
       selectedModel: 'xgb-fraud-v2.4.1',
       alertEmails: ['alerts@fraudshield.io', 'security-ops@fraudshield.io'],
       featureFlags: {
@@ -38,6 +40,8 @@ class MockStore {
         enableRealtimeWebhooks: true,
       },
     }
+    this.THRESHOLD = 0.89
+    this.REVIEW_FLOOR = 0.5
   }
 }
 

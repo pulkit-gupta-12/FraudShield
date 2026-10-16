@@ -1,31 +1,35 @@
-import { mockStore } from '../mock/index.js'
-import { delay } from '../utils/delay.js'
-
 /**
- * REST Endpoint: GET /api/v1/transactions/
- * Query params: { page = 1, limit = 20, search, riskTier, userId, merchant, startDate, endDate }
+ * transactions.js
+ *
+ * List    : GET /api/transactions/
+ *           Params: { page, pageSize, search, ordering, riskTier, userId, merchant, status, since }
+ *           Returns: { results: Transaction[], count: number }
+ *
+ * Detail  : GET /api/transactions/{id}/
+ * Update  : PATCH /api/transactions/{id}/status/  body: { status, reason }
+ * Batch   : POST /api/predict/batch/  multipart CSV
+ * Live    : GET /api/transactions/?since=<ISO timestamp>  (poll every 3 s)
  */
-export async function getTransactions(params = {}) {
-  await delay(300, 600)
-  const {
-    page = 1,
-    limit = 20,
-    search = '',
-    riskTier = 'ALL',
-    userId = null,
-    merchant = null,
-    status = 'ALL',
-  } = params
 
-  let filtered = [...mockStore.transactions]
+import { mockStore } from '../mock/index.js'
+import { delay }     from '../utils/delay.js'
+import apiClient     from './apiClient.js'
+import { THRESHOLD, REVIEW_FLOOR } from '../config/constants.js'
 
-  if (userId) {
-    filtered = filtered.filter((t) => t.userId === userId)
-  }
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 
-  if (merchant) {
-    filtered = filtered.filter((t) => t.merchant.toLowerCase().includes(merchant.toLowerCase()))
-  }
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Apply mock-side filtering, sorting, and pagination and return { results, count }. */
+function applyMockList(list, { page = 1, pageSize = 20, search = '', ordering = '', ...filters } = {}) {
+  let filtered = [...list]
+
+  // Filters
+  const { riskTier, userId, merchant, status, customerId } = filters
+
+  if (userId)     filtered = filtered.filter((t) => t.userId === userId)
+  if (customerId) filtered = filtered.filter((t) => t.userId === customerId)
+  if (merchant)   filtered = filtered.filter((t) => t.merchant?.toLowerCase().includes(merchant.toLowerCase()))
 
   if (riskTier && riskTier !== 'ALL') {
     filtered = filtered.filter((t) => t.trueLabel === riskTier)
@@ -39,86 +43,187 @@ export async function getTransactions(params = {}) {
     const q = search.toLowerCase()
     filtered = filtered.filter(
       (t) =>
-        t.id.toLowerCase().includes(q) ||
-        t.customerName.toLowerCase().includes(q) ||
-        t.merchant.toLowerCase().includes(q) ||
-        t.cardNumber.includes(q)
+        t.id?.toLowerCase().includes(q)           ||
+        t.customerName?.toLowerCase().includes(q) ||
+        t.merchant?.toLowerCase().includes(q)     ||
+        t.cardNumber?.includes(q),
     )
   }
 
-  const total = filtered.length
-  const startIndex = (page - 1) * limit
-  const paginated = filtered.slice(startIndex, startIndex + limit)
-
-  return {
-    data: paginated,
-    total,
-    page: Number(page),
-    limit: Number(limit),
-    totalPages: Math.ceil(total / limit),
+  // Ordering: e.g. '-timestamp' or 'amountINR'
+  if (ordering) {
+    const desc = ordering.startsWith('-')
+    const key  = desc ? ordering.slice(1) : ordering
+    filtered.sort((a, b) => {
+      const av = a[key], bv = b[key]
+      if (av === bv) return 0
+      return (av > bv ? 1 : -1) * (desc ? -1 : 1)
+    })
   }
+
+  const count      = filtered.length
+  const startIndex = (Number(page) - 1) * Number(pageSize)
+  const results    = filtered.slice(startIndex, startIndex + Number(pageSize))
+
+  return { results, count }
 }
 
-/**
- * REST Endpoint: GET /api/v1/transactions/:id/
- */
+// ─── GET /api/transactions/ ───────────────────────────────────────────────────
+
+export async function getTransactions(params = {}) {
+  if (!USE_MOCK) {
+    const { data } = await apiClient.get('/transactions/', { params })
+    return data // backend returns { results, count }
+  }
+
+  await delay(300, 600)
+  return applyMockList(mockStore.transactions, params)
+}
+
+// ─── GET /api/transactions/{id}/ ─────────────────────────────────────────────
+
 export async function getTransactionById(id) {
+  if (!USE_MOCK) {
+    const { data } = await apiClient.get(`/transactions/${id}/`)
+    return data
+  }
+
   await delay(300, 500)
   const txn = mockStore.transactions.find((t) => t.id === id)
-  if (!txn) throw new Error(`Transaction ${id} not found`)
+  if (!txn) {
+    const err = new Error(`Transaction ${id} not found`)
+    err.status = 404
+    throw err
+  }
   return txn
 }
 
-/**
- * REST Endpoint: PATCH /api/v1/transactions/:id/status/
- */
+// ─── PATCH /api/transactions/{id}/status/ ────────────────────────────────────
+
 export async function updateTransactionStatus(id, newStatus, reason = '') {
+  if (!USE_MOCK) {
+    const { data } = await apiClient.patch(`/transactions/${id}/status/`, { status: newStatus, reason })
+    return data
+  }
+
   await delay(400, 700)
   const txn = mockStore.transactions.find((t) => t.id === id)
-  if (!txn) throw new Error(`Transaction ${id} not found`)
+  if (!txn) {
+    const err = new Error(`Transaction ${id} not found`)
+    err.status = 404
+    throw err
+  }
 
-  txn.status = newStatus
+  txn.status        = newStatus
   txn.resolvedReason = reason
-  txn.updatedAt = new Date().toISOString()
+  txn.updatedAt     = new Date().toISOString()
 
-  // Add audit log
   mockStore.auditLogs.unshift({
-    id: `LOG-${Date.now()}`,
+    id:        `LOG-${Date.now()}`,
     timestamp: new Date().toISOString(),
-    actor: 'Analyst User',
+    actor:     'Analyst User',
     actorRole: 'analyst',
-    action: `TRANSACTION_${newStatus.toUpperCase()}`,
-    target: id,
+    action:    `TRANSACTION_${newStatus.toUpperCase()}`,
+    target:    id,
     ipAddress: '103.44.11.22',
-    status: 'SUCCESS',
-    details: `Status changed to ${newStatus}. Reason: ${reason || 'Manual review'}`,
+    status:    'SUCCESS',
+    details:   `Status changed to ${newStatus}. Reason: ${reason || 'Manual review'}`,
   })
 
   return txn
 }
 
-/**
- * REST Endpoint: POST /api/v1/transactions/batch-score/
- */
+// ─── POST /api/predict/batch/ ─────────────────────────────────────────────────
+
 export async function batchScoreTransactions(rows) {
+  if (!USE_MOCK) {
+    const formData = new FormData()
+    // rows is expected to be a File (CSV) or an array of row objects
+    if (rows instanceof File) {
+      formData.append('file', rows)
+    } else {
+      const csvHeader = 'Amount,Time\n'
+      const csvBody   = rows.map((r) => `${r.Amount || r.amount || ''},${r.Time || ''}`).join('\n')
+      const blob      = new Blob([csvHeader + csvBody], { type: 'text/csv' })
+      formData.append('file', blob, 'batch.csv')
+    }
+    const { data } = await apiClient.post('/predict/batch/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    // data = { processedCount, flaggedCount, fraudCount, results: [...] }
+    return data
+  }
+
   await delay(600, 900)
   const scored = rows.map((row, idx) => {
-    const amount = Number(row.Amount || row.amount || 1000)
-    const isHigh = amount > 25000 || idx % 15 === 0
-    const riskScore = isHigh ? Number((0.75 + Math.random() * 0.2).toFixed(3)) : Number((0.02 + Math.random() * 0.3).toFixed(3))
+    const amount   = Number(row.Amount || row.amount || 1000)
+    const isHigh   = amount > 25000 || idx % 15 === 0
+    const riskScore = isHigh
+      ? Number((THRESHOLD + Math.random() * 0.08).toFixed(3))
+      : Number((0.02 + Math.random() * 0.45).toFixed(3))
     return {
       ...row,
-      id: row.id || `BATCH-${Date.now()}-${idx + 1}`,
+      id:        row.id || `BATCH-${Date.now()}-${idx + 1}`,
       riskScore,
-      trueLabel: riskScore >= 0.7 ? 'FRAUD' : riskScore >= 0.4 ? 'SUSPICIOUS' : 'LEGIT',
-      status: riskScore >= 0.7 ? 'Blocked' : riskScore >= 0.4 ? 'Under Review' : 'Approved',
+      band:      riskScore >= THRESHOLD ? 'FRAUD' : riskScore >= REVIEW_FLOOR ? 'SUSPICIOUS' : 'LEGIT',
+      trueLabel: riskScore >= THRESHOLD ? 'FRAUD' : riskScore >= REVIEW_FLOOR ? 'SUSPICIOUS' : 'LEGIT',
+      status:    riskScore >= THRESHOLD ? 'Blocked' : riskScore >= REVIEW_FLOOR ? 'Under Review' : 'Approved',
+      factors:   [{ name: 'Amount', impact: riskScore >= REVIEW_FLOOR ? 0.4 : -0.2 }],
     }
   })
 
   return {
     processedCount: scored.length,
-    flaggedCount: scored.filter((s) => s.riskScore >= 0.4).length,
-    fraudCount: scored.filter((s) => s.riskScore >= 0.7).length,
-    results: scored,
+    flaggedCount:   scored.filter((s) => s.riskScore >= REVIEW_FLOOR).length,
+    fraudCount:     scored.filter((s) => s.riskScore >= THRESHOLD).length,
+    results:        scored,
   }
+}
+
+// ─── Live feed  (GET /api/transactions/?since=<ISO>) ─────────────────────────
+// Poll this every 3 s in components; returns { results, count } same as getTransactions.
+
+let _liveLastTimestamp = null
+
+export async function getLiveTransactions() {
+  if (!USE_MOCK) {
+    const params = _liveLastTimestamp ? { since: _liveLastTimestamp } : { ordering: '-timestamp', pageSize: 10 }
+    const { data } = await apiClient.get('/transactions/', { params })
+    if (data.results?.length) {
+      _liveLastTimestamp = data.results[0].timestamp
+    }
+    return data
+  }
+
+  // Mock: simulate new transaction(s) arriving occasionally
+  await delay(100, 300)
+  const now    = new Date().toISOString()
+  const recent = mockStore.transactions.filter(
+    (t) => !_liveLastTimestamp || t.timestamp > _liveLastTimestamp,
+  ).slice(0, 5)
+
+  _liveLastTimestamp = now
+
+  // Occasionally inject a new synthetic transaction so the feed animates
+  if (Math.random() < 0.4) {
+    const base = mockStore.transactions[Math.floor(Math.random() * 30)]
+    if (base) {
+      const fresh = {
+        ...base,
+        id:        `TXN-LIVE-${Date.now()}`,
+        timestamp: now,
+        riskScore: Number((Math.random()).toFixed(3)),
+      }
+      fresh.trueLabel = fresh.riskScore >= THRESHOLD ? 'FRAUD' : fresh.riskScore >= REVIEW_FLOOR ? 'SUSPICIOUS' : 'LEGIT'
+      mockStore.transactions.unshift(fresh)
+      return { results: [fresh, ...recent].slice(0, 10), count: mockStore.transactions.length }
+    }
+  }
+
+  return { results: mockStore.transactions.slice(0, 10), count: mockStore.transactions.length }
+}
+
+/** Reset the live-feed timestamp (call when the live-feed component unmounts or reinits). */
+export function resetLiveFeed() {
+  _liveLastTimestamp = null
 }

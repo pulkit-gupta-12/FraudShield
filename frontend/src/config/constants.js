@@ -1,3 +1,6 @@
+export const THRESHOLD = 0.89
+export const REVIEW_FLOOR = 0.5
+
 export const ROLES = {
   ADMIN: 'admin',
   ANALYST: 'analyst',
@@ -6,14 +9,17 @@ export const ROLES = {
 }
 
 export const RISK_LEVELS = {
+  SAFE: 'Approved',
+  REVIEW: 'Needs review',
+  HIGH_RISK: 'Likely fraud',
   LEGIT: 'LEGIT',
   SUSPICIOUS: 'SUSPICIOUS',
   FRAUD: 'FRAUD',
 }
 
 export const RISK_THRESHOLDS = {
-  SUSPICIOUS: 0.40,
-  FRAUD: 0.70,
+  SUSPICIOUS: REVIEW_FLOOR,
+  FRAUD: THRESHOLD,
 }
 
 export const DEMO_ACCOUNTS = [

@@ -56,6 +56,9 @@ export function Drawer({
 
         <div className="pointer-events-none fixed inset-y-0 right-0 flex max-w-full pl-10">
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={title || 'Slide-over drawer'}
             className={clsx(
               'pointer-events-auto w-screen bg-white shadow-2xl flex flex-col justify-between border-l border-neutral-200 animate-in slide-in-from-right duration-200',
               sizeClasses[size],

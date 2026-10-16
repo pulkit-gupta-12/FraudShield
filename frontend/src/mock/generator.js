@@ -162,7 +162,7 @@ export function generateCards(users) {
   return cards
 }
 
-// Generate 400 Transactions with exact 6% high risk (>0.70)
+// Generate 400 Transactions with ~3% >= 0.89, ~5% between 0.5 and 0.89, rest < 0.5
 export function generateTransactions(users, cards) {
   const transactions = []
   const now = Date.now()
@@ -173,22 +173,33 @@ export function generateTransactions(users, cards) {
     const merchantObj = MERCHANTS[Math.floor(rng() * MERCHANTS.length)]
     const city = CITIES[Math.floor(rng() * CITIES.length)]
     
-    // Seeded distribution: exactly ~6% high risk, ~12% suspicious, rest legit
+    // Exact distribution:
+    // ~3% (12 txns) >= 0.89 (High risk / Blocked)
+    // ~5% (20 txns) between 0.5 and 0.89 (Review / Under Review)
+    // rest (368 txns, ~92%) < 0.5 (Safe / Approved)
     let riskScore
     let trueLabel
-    const p = rng()
-    if (i <= 25 || p < 0.062) {
-      // FRAUD / High risk (> 0.70)
-      riskScore = Number((0.72 + rng() * 0.26).toFixed(3))
+    let band
+    let status
+
+    if (i <= 12) {
+      // High Risk / FRAUD (>= 0.89)
+      riskScore = Number((0.89 + rng() * 0.09).toFixed(3))
       trueLabel = 'FRAUD'
-    } else if (p < 0.18) {
-      // SUSPICIOUS / Review (0.40 - 0.69)
-      riskScore = Number((0.41 + rng() * 0.28).toFixed(3))
+      band = 'high'
+      status = 'Blocked'
+    } else if (i <= 32) {
+      // Review / SUSPICIOUS (0.50 - 0.889)
+      riskScore = Number((0.50 + rng() * 0.38).toFixed(3))
       trueLabel = 'SUSPICIOUS'
+      band = 'review'
+      status = 'Under Review'
     } else {
-      // LEGIT / Safe (< 0.40)
-      riskScore = Number((0.02 + rng() * 0.35).toFixed(3))
+      // Safe / LEGIT (< 0.50)
+      riskScore = Number((0.01 + rng() * 0.47).toFixed(3))
       trueLabel = 'LEGIT'
+      band = 'safe'
+      status = 'Approved'
     }
 
     const amountINR = trueLabel === 'FRAUD'
@@ -241,10 +252,11 @@ export function generateTransactions(users, cards) {
       currency: 'INR',
       timestamp,
       riskScore,
+      band,
       trueLabel,
       explanationFactors,
       modelInputs,
-      status: trueLabel === 'FRAUD' ? 'Blocked' : trueLabel === 'SUSPICIOUS' ? 'Under Review' : 'Approved',
+      status,
       channel: ['POS', 'Online', 'UPI', 'ATM'][Math.floor(rng() * 4)],
     })
   }
@@ -253,14 +265,14 @@ export function generateTransactions(users, cards) {
   return transactions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 }
 
-// Generate 40 Alerts
+// Generate Alerts from transactions at or above 0.50
 export function generateAlerts(transactions) {
   const alerts = []
-  const highRiskTxns = transactions.filter(t => t.riskScore >= 0.40).slice(0, 40)
+  const highRiskTxns = transactions.filter(t => t.riskScore >= 0.50)
 
   highRiskTxns.forEach((txn, idx) => {
-    const isCritical = txn.riskScore >= 0.75
-    const isHigh = txn.riskScore >= 0.60
+    const isCritical = txn.riskScore >= 0.89
+    const isHigh = txn.riskScore >= 0.70
     alerts.push({
       id: `ALT-${String(1000 + idx + 1)}`,
       alertId: `ALT-${String(1000 + idx + 1)}`,
@@ -270,7 +282,7 @@ export function generateAlerts(transactions) {
       merchant: txn.merchant,
       riskScore: txn.riskScore,
       severity: isCritical ? 'critical' : isHigh ? 'high' : 'medium',
-      status: idx < 12 ? 'new' : idx < 28 ? 'investigating' : 'resolved',
+      status: idx < 12 ? 'new' : idx < 24 ? 'investigating' : 'resolved',
       ruleTriggered: txn.explanationFactors[0]?.description || 'Anomalous velocity threshold exceeded',
       timestamp: txn.timestamp,
     })
@@ -440,7 +452,7 @@ export function generateNotifications() {
     { id: 'ntf_11', timestamp: new Date(Date.now() - 150000000).toISOString(), title: 'API Gateway Latency Alert', message: 'Predict endpoint latency spike resolved (142ms -> 24ms).', type: 'alert', read: true, link: '/admin/config' },
     { id: 'ntf_12', timestamp: new Date(Date.now() - 180000000).toISOString(), title: 'Compliance Report Ready', message: 'RBI regulatory fraud reporting annexure generated for Q3.', type: 'case', read: true, link: '/analyst/dashboard' },
     { id: 'ntf_13', timestamp: new Date(Date.now() - 210000000).toISOString(), title: 'Customer Contact Verified', message: 'Customer phone OTP authenticated for case CAS-5004.', type: 'case', read: true, link: '/analyst/investigate' },
-    { id: 'ntf_14', timestamp: new Date(Date.now() - 240000000).toISOString(), title: 'Threshold Modified', message: 'Fraud cutoff updated to 0.70 by Admin.', type: 'system', read: true, link: '/admin/config' },
+    { id: 'ntf_14', timestamp: new Date(Date.now() - 240000000).toISOString(), title: 'Threshold Modified', message: 'Fraud cutoff updated to 0.89 by Admin.', type: 'system', read: true, link: '/admin/config' },
     { id: 'ntf_15', timestamp: new Date(Date.now() - 270000000).toISOString(), title: 'Platform Health Optimal', message: 'All 6 microservices reporting nominal latency and 0 unhandled faults.', type: 'system', read: true, link: '/admin/dashboard' },
   ]
 }
@@ -450,6 +462,7 @@ export function generateNotifications() {
 export const MODEL_INFO = {
   version: 'xgb-fraud-v2.4.1',
   algorithm: 'XGBoost Classifier with SMOTE & Focal Loss',
+  threshold: 0.89,
   trainedDate: '2026-09-28T14:30:00Z',
   datasetSize: '284,807 Kaggle Transactions (Indianized INR scale)',
   featuresCount: 30,
@@ -495,7 +508,7 @@ export const MODEL_INFO = {
     { feature: 'V10', importance: 0.182, description: 'Behavioral sequence pattern deviation' },
     { feature: 'V12', importance: 0.154, description: 'Account velocity anomaly factor' },
     { feature: 'V17', importance: 0.118, description: 'Spatial transaction dispersion' },
-    { feature: 'V4', importance: 0.089, description: 'High-risk channel correlation' },
+    { feature: 'V4', importance: 0.091, description: 'High-risk channel correlation' },
     { feature: 'V11', importance: 0.065, description: 'Terminal authentication deviation' },
     { feature: 'Amount', importance: 0.048, description: 'Log-normalized INR transaction amount' },
     { feature: 'V2', importance: 0.035, description: 'User demographic baseline divergence' },

@@ -1,12 +1,19 @@
-import { RISK_LEVELS, RISK_THRESHOLDS } from '../config/constants.js'
+import { THRESHOLD, REVIEW_FLOOR } from '../config/constants.js'
 
 /**
  * Categorizes risk based on 0-1 score
+ * Score below 0.5 -> Safe (green, 'Approved')
+ * Score from 0.5 up to 0.89 -> Review (amber, 'Needs review')
+ * Score 0.89 or higher -> High Risk (red, 'Likely fraud', blocked)
  */
 export function getRiskTier(score) {
-  if (score >= RISK_THRESHOLDS.FRAUD) {
+  const numScore = Number(score) || 0
+  if (numScore >= THRESHOLD) {
     return {
-      label: RISK_LEVELS.FRAUD,
+      label: 'Likely fraud',
+      badgeLabel: 'High Risk',
+      status: 'Blocked',
+      band: 'high',
       tier: 'danger',
       colorToken: 'risk',
       tailwindText: 'text-risk-700',
@@ -15,9 +22,12 @@ export function getRiskTier(score) {
       badgeClass: 'bg-risk-100 text-risk-800 border border-risk-300',
     }
   }
-  if (score >= RISK_THRESHOLDS.SUSPICIOUS) {
+  if (numScore >= REVIEW_FLOOR) {
     return {
-      label: RISK_LEVELS.SUSPICIOUS,
+      label: 'Needs review',
+      badgeLabel: 'Review',
+      status: 'Needs review',
+      band: 'review',
       tier: 'warning',
       colorToken: 'review',
       tailwindText: 'text-review-700',
@@ -27,7 +37,10 @@ export function getRiskTier(score) {
     }
   }
   return {
-    label: RISK_LEVELS.LEGIT,
+    label: 'Approved',
+    badgeLabel: 'Safe',
+    status: 'Approved',
+    band: 'safe',
     tier: 'success',
     colorToken: 'safe',
     tailwindText: 'text-safe-700',
@@ -36,3 +49,11 @@ export function getRiskTier(score) {
     badgeClass: 'bg-safe-100 text-safe-800 border border-safe-300',
   }
 }
+
+export function getRiskBand(score) {
+  const numScore = Number(score) || 0
+  if (numScore >= THRESHOLD) return 'high'
+  if (numScore >= REVIEW_FLOOR) return 'review'
+  return 'safe'
+}
+

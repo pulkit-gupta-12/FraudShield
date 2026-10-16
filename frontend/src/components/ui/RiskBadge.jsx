@@ -1,11 +1,12 @@
 import React from 'react'
 import clsx from 'clsx'
 import { ShieldCheck, AlertTriangle, ShieldAlert } from 'lucide-react'
+import { THRESHOLD, REVIEW_FLOOR } from '../../config/constants.js'
 
 /**
  * RiskBadge component for displaying transaction classification.
  * 
- * @param {'LEGIT'|'SUSPICIOUS'|'FRAUD'|'safe'|'review'|'risk'|number} level - Label or numeric riskScore (0-1)
+ * @param {'LEGIT'|'SUSPICIOUS'|'FRAUD'|'safe'|'review'|'risk'|number} [level] - Label or numeric riskScore (0-1)
  * @param {'sm'|'md'} [size='sm']
  * @param {boolean} [showScore=false]
  * @param {number} [score]
@@ -17,28 +18,48 @@ export function RiskBadge({
   score = null,
   className = '',
 }) {
+  const [thresholds, setThresholds] = React.useState(() => ({
+    reviewFloor: REVIEW_FLOOR,
+    threshold: THRESHOLD,
+  }))
+
+  React.useEffect(() => {
+    const handler = (e) => {
+      if (e.detail) {
+        setThresholds({
+          reviewFloor: Number(e.detail.reviewFloor ?? e.detail.suspicious) || REVIEW_FLOOR,
+          threshold: Number(e.detail.threshold ?? e.detail.fraud) || THRESHOLD,
+        })
+      }
+    }
+    window.addEventListener('threshold-updated', handler)
+    return () => window.removeEventListener('threshold-updated', handler)
+  }, [])
+
   let tier = 'safe'
   let label = 'Safe'
   let displayScore = score
 
-  if (typeof level === 'number') {
-    displayScore = level
-    if (level >= 0.7) {
+  const targetScore = typeof level === 'number' ? level : (typeof score === 'number' ? score : null)
+
+  if (targetScore !== null) {
+    displayScore = targetScore
+    if (targetScore >= thresholds.threshold) {
       tier = 'risk'
       label = 'High Risk'
-    } else if (level >= 0.4) {
+    } else if (targetScore >= thresholds.reviewFloor) {
       tier = 'review'
       label = 'Review'
     } else {
       tier = 'safe'
       label = 'Safe'
     }
-  } else {
+  } else if (level) {
     const norm = String(level).toUpperCase()
-    if (norm === 'FRAUD' || norm === 'RISK' || norm === 'HIGH RISK') {
+    if (['FRAUD', 'RISK', 'HIGH RISK', 'HIGH', 'LIKELY FRAUD', 'BLOCKED'].includes(norm)) {
       tier = 'risk'
       label = 'High Risk'
-    } else if (norm === 'SUSPICIOUS' || norm === 'REVIEW') {
+    } else if (['SUSPICIOUS', 'REVIEW', 'NEEDS REVIEW', 'UNDER REVIEW'].includes(norm)) {
       tier = 'review'
       label = 'Review'
     } else {

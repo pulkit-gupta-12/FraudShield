@@ -164,7 +164,7 @@ export function UiKitPage() {
             icon={<CheckCircle2 className="w-5 h-5" />}
             trend="+94.0%"
             color="safe"
-            subtitle="Safe score < 0.40"
+            subtitle="Safe score < 0.50"
           />
           <StatCard
             title="Flagged Review"
@@ -268,11 +268,11 @@ export function UiKitPage() {
             <div>
               <h3 className="text-sm font-bold text-neutral-900 text-center">Interactive RiskMeter Gauge</h3>
               <p className="text-xs text-neutral-500 text-center mt-1">
-                Drag slider below to test needle and threshold marker at 70%
+                Drag slider below to test needle and threshold marker at 89% (review floor at 50%)
               </p>
             </div>
             <div className="py-4">
-              <RiskMeter value={sliderVal} threshold={70} size={220} />
+              <RiskMeter value={sliderVal} threshold={89} warningThreshold={50} size={220} />
             </div>
             <div className="w-full">
               <Slider
@@ -427,7 +427,7 @@ export function UiKitPage() {
             <p>
               Slide-over drawer is ideal for detailed transaction inspection, customer KYC profiles, and real-time rule test consoles.
             </p>
-            <RiskMeter value={84} threshold={70} size={180} />
+            <RiskMeter value={84} threshold={89} warningThreshold={50} size={180} />
             <FactorsChart factors={sampleFactors.slice(0, 3)} />
           </div>
         </Drawer>
@@ -506,7 +506,7 @@ export function UiKitPage() {
                     id: 'acc1',
                     title: 'XGBoost Classification Thresholds',
                     subtitle: 'Operational boundary rules',
-                    content: 'Transactions with probability >= 0.70 are automatically blocked. Between 0.40 and 0.69 are routed to Level 2 analysts for manual review.',
+                    content: 'Transactions with probability >= 0.89 are automatically blocked. Between 0.50 and 0.89 are routed to Level 2 analysts for manual review.',
                   },
                   {
                     id: 'acc2',

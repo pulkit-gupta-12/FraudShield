@@ -17,7 +17,7 @@ import {
   Search,
   Zap,
 } from 'lucide-react'
-import { predictFraud, predictBatch } from '../../services/predict.js'
+import { predictFraud, predictBatch, simulatorTick } from '../../services/predict.js'
 import { getTransactions } from '../../services/transactions.js'
 import { RiskMeter } from '../../components/charts/RiskMeter.jsx'
 import { FactorsChart } from '../../components/charts/FactorsChart.jsx'
@@ -193,27 +193,18 @@ export function TransactionCheckerPage() {
   // ── Tab 3: Live Simulator with unmount cleanup ──
   useEffect(() => {
     if (simRunning) {
-      timerRef.current = setInterval(() => {
-        const randomAmount = Math.floor(200 + Math.random() * 95000)
-        const isFraud = Math.random() < 0.18
-        const simulatedScore = isFraud
-          ? Number((THRESHOLD + Math.random() * 0.08).toFixed(3))
-          : Number((0.02 + Math.random() * 0.45).toFixed(3))
-
-        const newSimTxn = {
-          id: `SIM-${Date.now().toString().slice(-5)}`,
-          timestamp: new Date().toISOString(),
-          cardLast4: String(Math.floor(1000 + Math.random() * 9000)),
-          merchant: ['Flipkart', 'Zomato', 'CryptoHub', 'Amazon India', 'Tanishq Gold'][
-            Math.floor(Math.random() * 5)
-          ],
-          amountINR: randomAmount,
-          riskScore: simulatedScore,
-          band: simulatedScore >= THRESHOLD ? 'FRAUD' : simulatedScore >= REVIEW_FLOOR ? 'SUSPICIOUS' : 'LEGIT',
+      const runTick = async () => {
+        try {
+          const newSimTxn = await simulatorTick()
+          setSimFeed((prev) => [newSimTxn, ...prev.slice(0, 19)])
+        } catch (err) {
+          console.error('Simulator tick failed:', err)
         }
+      }
 
-        setSimFeed((prev) => [newSimTxn, ...prev.slice(0, 19)])
-      }, 2500)
+      // Initial tick immediately upon start
+      runTick()
+      timerRef.current = setInterval(runTick, 2500)
     } else {
       if (timerRef.current) clearInterval(timerRef.current)
     }

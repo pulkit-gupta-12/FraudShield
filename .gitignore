@@ -10,6 +10,19 @@ dist/
 build/
 **/build/
 
+# Database & Media
+*.sqlite3
+db.sqlite3
+media/
+**/media/
+
+# Python cache & artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
 PROJECT_CONTEXT.md
 
 ProjectContext.md

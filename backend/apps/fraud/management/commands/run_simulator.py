@@ -33,7 +33,7 @@ class Command(BaseCommand):
                     style_fn = self.style.SUCCESS
 
                 self.stdout.write(style_fn(
-                    f"[{count}] {txn.public_id} | Amount: ₹{txn.amount_inr:,.2f} | "
+                    f"[{count}] {txn.public_id} | Amount: INR {txn.amount_inr:,.2f} | "
                     f"Risk: {txn.risk_score:.4f} | Band: {band_str.upper()} | Status: {txn.status}"
                 ))
                 time.sleep(interval)

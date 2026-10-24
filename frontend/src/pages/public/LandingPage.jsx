@@ -26,12 +26,17 @@ export function LandingPage() {
   // Live feed poller from services/transactions.js (DATA RULE #3)
   useEffect(() => {
     let isMounted = true
+    let lastSince = null
 
     const pollFeed = async () => {
       try {
-        const data = await getLiveTransactions()
-        if (isMounted && data?.results) {
-          setLiveTxns(data.results.slice(0, 4))
+        const data = await getLiveTransactions(lastSince)
+        if (isMounted && data?.results?.length) {
+          lastSince = data.results[0].timestamp
+          setLiveTxns((prev) => {
+            const fresh = data.results.filter((tx) => !prev.some((p) => p.id === tx.id))
+            return [...fresh, ...prev].slice(0, 4)
+          })
         }
       } catch (err) {
         // quiet fallback for landing page demo

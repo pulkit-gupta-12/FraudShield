@@ -60,20 +60,20 @@ def predict_single(request):
     Or with features (score custom values, do NOT save; validate all 30 features present & numeric).
     """
     data = request.data
-    transaction_id = data.get('transactionId') or data.get('id')
+    transaction_id = data.get('transaction_id') or data.get('transactionId') or data.get('id')
     features = data.get('features')
 
     cfg = ml_service.get_config()
     threshold = cfg['threshold']
     review_floor = cfg['review_floor']
 
+    txn = None
     if transaction_id:
         txn = Transaction.objects.filter(
             Q(public_id=transaction_id) | (Q(id=transaction_id) if str(transaction_id).isdigit() else Q(pk__isnull=True))
         ).first()
-        if not txn:
-            return Response({'detail': f"Transaction '{transaction_id}' not found."}, status=404)
 
+    if txn:
         inputs = txn.model_inputs
         if not inputs:
             return Response({'detail': "Transaction does not contain feature inputs."}, status=400)
@@ -105,25 +105,25 @@ def predict_single(request):
 
         return Response(resp)
 
+    elif transaction_id and not features:
+        return Response({'detail': f"Transaction '{transaction_id}' not found."}, status=404)
+
     elif features:
         if not isinstance(features, dict):
-            return Response({'detail': "'features' must be an object/dictionary of 30 feature values."}, status=400)
+            return Response({'detail': "'features' must be an object/dictionary of feature values."}, status=400)
 
-        # Validate that all 30 features are present
-        missing = [f for f in FEATURES if f not in features]
-        if missing:
-            return Response({'detail': f"Missing required features: {missing}"}, status=400)
-
-        # Validate all 30 features are numeric
         clean_features = {}
         for f in FEATURES:
-            val = features[f]
-            if isinstance(val, bool):
-                return Response({'detail': f"Feature '{f}' must be numeric, received boolean."}, status=400)
-            try:
-                clean_features[f] = float(val)
-            except (ValueError, TypeError):
-                return Response({'detail': f"Feature '{f}' must be a valid numeric value."}, status=400)
+            if f in features:
+                val = features[f]
+                if isinstance(val, bool):
+                    return Response({'detail': f"Feature '{f}' must be numeric, received boolean."}, status=400)
+                try:
+                    clean_features[f] = float(val)
+                except (ValueError, TypeError):
+                    return Response({'detail': f"Feature '{f}' must be a valid numeric value."}, status=400)
+            else:
+                clean_features[f] = 0.0
 
         row_df = pd.DataFrame([clean_features])
         start_t = time.perf_counter()
@@ -397,7 +397,7 @@ def model_threshold(request):
     AuditLog.objects.create(
         actor=request.user.email,
         role=request.user.role,
-        action='CONFIG_UPDATE',
+        action='THRESHOLDS_UPDATED',
         target='ModelConfig',
         status='SUCCESS',
         details=f"Updated thresholds: threshold {old_threshold} -> {cfg.threshold}, reviewFloor {old_review_floor} -> {cfg.review_floor}",

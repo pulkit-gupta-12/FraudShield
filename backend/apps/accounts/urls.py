@@ -17,6 +17,9 @@ user_detail = UserViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 
 user_role = UserViewSet.as_view({'patch': 'update_role'})
 user_status = UserViewSet.as_view({'patch': 'update_status'})
 user_invite = UserViewSet.as_view({'post': 'invite'})
+user_access_requests = UserViewSet.as_view({'get': 'access_requests'})
+user_approve = UserViewSet.as_view({'post': 'approve'})
+user_reject = UserViewSet.as_view({'post': 'reject'})
 
 urlpatterns = [
     # Auth endpoints
@@ -32,8 +35,11 @@ urlpatterns = [
 
     # Users management
     path('users/', user_list, name='user_list'),
+    path('users/access-requests/', user_access_requests, name='user_access_requests'),
     path('users/<int:pk>/', user_detail, name='user_detail'),
     path('users/<int:pk>/role/', user_role, name='user_role'),
     path('users/<int:pk>/status/', user_status, name='user_status'),
+    path('users/<int:pk>/approve/', user_approve, name='user_approve'),
+    path('users/<int:pk>/reject/', user_reject, name='user_reject'),
     path('users/invite/', user_invite, name='user_invite'),
 ]

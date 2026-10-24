@@ -1,15 +1,21 @@
 import csv
 import io
+import os
+import uuid
+import mimetypes
 from datetime import datetime
 from django.db import transaction as db_transaction
 from django.db.models import Q
-from django.http import HttpResponse, Http404
+from django.http import HttpResponse, Http404, FileResponse
+from django.core.files.storage import default_storage
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError, PermissionDenied
 
+from apps.accounts.models import User
 from apps.accounts.permissions import ScopedQuerySetMixin, IsAdmin, IsAnalyst
 from apps.audit.models import AuditLog
 from apps.fraud.models import (
@@ -587,6 +593,14 @@ class CaseViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
                         body=f"Your card ending in {card.last4} has been automatically blocked due to confirmed fraud on transaction {txn.public_id}.",
                         link=f"/cards",
                     )
+                for a in User.objects.filter(role__in=['analyst', 'admin']).exclude(id=user.id):
+                    Notification.objects.create(
+                        user=a,
+                        type='case',
+                        title='Case Decision: Confirmed Fraud',
+                        body=f"Case #{case.id} for transaction {txn.public_id} was confirmed as fraud by {user.email}.",
+                        link=f"/cases/{case.id}",
+                    )
 
                 timeline_action = 'Marked as Fraud'
 
@@ -606,12 +620,46 @@ class CaseViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
                     case.alert.save()
                 Alert.objects.filter(transaction=txn).update(status='resolved', resolved_at=timezone.now())
 
+                if card and card.owner:
+                    Notification.objects.create(
+                        user=card.owner,
+                        type='alert',
+                        title='Transaction Cleared as Safe',
+                        body=f"Transaction {txn.public_id} on your card ending in {card.last4} has been reviewed and cleared as safe.",
+                        link=f"/transactions",
+                    )
+                for a in User.objects.filter(role__in=['analyst', 'admin']).exclude(id=user.id):
+                    Notification.objects.create(
+                        user=a,
+                        type='case',
+                        title='Case Decision: Confirmed Safe',
+                        body=f"Case #{case.id} for transaction {txn.public_id} was marked safe by {user.email}.",
+                        link=f"/cases/{case.id}",
+                    )
+
                 timeline_action = 'Marked as Safe'
 
             elif action_name == 'escalate':
                 case.status = 'Escalated'
                 case.priority = 'P1'
                 case.save()
+
+                if card and card.owner:
+                    Notification.objects.create(
+                        user=card.owner,
+                        type='alert',
+                        title='Case Escalated for Investigation',
+                        body=f"Your transaction {txn.public_id} has been escalated for priority investigation.",
+                        link=f"/cases",
+                    )
+                for a in User.objects.filter(role__in=['analyst', 'admin']).exclude(id=user.id):
+                    Notification.objects.create(
+                        user=a,
+                        type='case',
+                        title='Case Escalated to P1',
+                        body=f"Case #{case.id} for transaction {txn.public_id} was escalated to P1 priority by {user.email}.",
+                        link=f"/cases/{case.id}",
+                    )
 
                 timeline_action = 'Case Escalated'
 
@@ -643,9 +691,25 @@ class CaseViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
 
 
 class CardViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
+    """
+    Card management:
+    List: customer own, admin all.
+    PATCH for owner/admin: status (active/blocked), spendingLimit, travelNotice.
+    Blocking/unblocking writes audit log and notification.
+    """
     permission_classes = [IsAuthenticated]
     serializer_class = CardSerializer
     queryset = Card.objects.select_related('owner').all()
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Card.objects.none()
+        if user.role == 'admin' or user.is_superuser:
+            return Card.objects.select_related('owner').all()
+        elif user.role == 'customer':
+            return Card.objects.select_related('owner').filter(owner=user)
+        return Card.objects.none()
 
     def filter_queryset(self, queryset):
         params = self.request.query_params
@@ -672,21 +736,124 @@ class CardViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
             queryset = queryset.order_by(ordering)
         return queryset
 
-    @action(detail=True, methods=['patch'], url_path='status')
-    def update_status(self, request, pk=None):
+    def partial_update(self, request, *args, **kwargs):
         card = self.get_object()
-        new_status = request.data.get('status')
-        if new_status not in ('active', 'blocked'):
-            return Response({'detail': f"Invalid status: '{new_status}'."}, status=400)
-        card.status = new_status
+        if request.user.role != 'admin' and not request.user.is_superuser and card.owner != request.user:
+            raise Http404("Card not found.")
+
+        data = request.data
+        new_status = data.get('status')
+        spending_limit = data.get('spendingLimit')
+        if spending_limit is None:
+            spending_limit = data.get('spending_limit')
+        travel_notice = data.get('travelNotice')
+        if travel_notice is None:
+            travel_notice = data.get('travel_notice')
+
+        if new_status is not None:
+            if new_status not in ('active', 'blocked'):
+                raise ValidationError({'status': f"Invalid status: '{new_status}'."})
+            if new_status != card.status:
+                card.status = new_status
+                action_name = "CARD_BLOCKED" if new_status == 'blocked' else "CARD_UNBLOCKED"
+                AuditLog.objects.create(
+                    actor=request.user.email,
+                    role=request.user.role,
+                    action=action_name,
+                    target=f"Card:{card.id} (•••• {card.last4})",
+                    status='SUCCESS',
+                    details=f"Card status updated to {new_status}",
+                    ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+                )
+                Notification.objects.create(
+                    user=card.owner,
+                    type='alert' if new_status == 'blocked' else 'card',
+                    title=f"Card {new_status.title()}",
+                    body=f"Your card ending in {card.last4} has been {new_status}.",
+                    link="/cards",
+                )
+
+        if spending_limit is not None:
+            try:
+                lim = float(spending_limit)
+            except (ValueError, TypeError):
+                raise ValidationError({'spendingLimit': 'Spending limit must be a valid number.'})
+            if lim <= 0:
+                raise ValidationError({'spendingLimit': 'Spending limit must be a positive number.'})
+            if lim > 10000000:
+                raise ValidationError({'spendingLimit': 'Spending limit cannot exceed 10,000,000 INR.'})
+            card.spending_limit = lim
+
+        if travel_notice is not None:
+            card.travel_notice = bool(travel_notice)
+
         card.save()
         return Response(self.get_serializer(card).data)
 
+    def update(self, request, *args, **kwargs):
+        return self.partial_update(request, *args, **kwargs)
+
+    @action(detail=True, methods=['patch'], url_path='status')
+    def update_status(self, request, pk=None):
+        return self.partial_update(request, pk=pk)
+
+
+def validate_evidence_file(f):
+    if f.size > 5 * 1024 * 1024:
+        raise ValidationError({'file': 'File exceeds maximum allowed size of 5 MB.'})
+
+    ext = os.path.splitext(f.name)[1].lower()
+    if ext not in ('.pdf', '.png', '.jpg', '.jpeg'):
+        raise ValidationError({'file': f"Unsupported file type '{ext}'. Only PDF, PNG, and JPG are allowed."})
+
+    f.seek(0)
+    header = f.read(16)
+    f.seek(0)
+
+    is_pdf = header.startswith(b'%PDF-')
+    is_png = header.startswith(b'\x89PNG\r\n\x1a\n')
+    is_jpg = header.startswith(b'\xff\xd8\xff')
+
+    if not (is_pdf or is_png or is_jpg):
+        raise ValidationError({'file': 'Invalid file signature (magic bytes do not match PDF/PNG/JPG).'})
+
+    if ext == '.pdf' and not is_pdf:
+        raise ValidationError({'file': 'Fake file extension: expected valid PDF file.'})
+    if ext == '.png' and not is_png:
+        raise ValidationError({'file': 'Fake file extension: expected valid PNG file.'})
+    if ext in ('.jpg', '.jpeg') and not is_jpg:
+        raise ValidationError({'file': 'Fake file extension: expected valid JPG file.'})
+
 
 class DisputeViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
+    """
+    Dispute lifecycle management:
+    List/detail: merchant own, admin all (customer own).
+    Evidence upload: PDF, PNG, JPG with magic byte verification, max 5 MB, stored under MEDIA_ROOT with random filename.
+    Evidence download: authenticated GET /api/disputes/{id}/evidence/{evidenceId}/.
+    Advance: moves stages (opened, evidence, review, resolved). Only owning merchant or admin. Final outcome only by admin.
+    Notifies the other side at each stage.
+    """
     permission_classes = [IsAuthenticated]
     serializer_class = DisputeSerializer
     queryset = Dispute.objects.select_related('customer', 'transaction', 'merchant').prefetch_related('evidence_files').all()
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Dispute.objects.none()
+        if user.role == 'admin' or user.is_superuser:
+            return Dispute.objects.select_related('customer', 'transaction', 'merchant').prefetch_related('evidence_files').all()
+        elif user.role == 'merchant':
+            merchant = getattr(user, 'merchant', None)
+            if merchant:
+                return Dispute.objects.select_related('customer', 'transaction', 'merchant').prefetch_related('evidence_files').filter(merchant=merchant)
+            elif user.organisation:
+                return Dispute.objects.select_related('customer', 'transaction', 'merchant').prefetch_related('evidence_files').filter(merchant__name=user.organisation)
+            return Dispute.objects.none()
+        elif user.role == 'customer':
+            return Dispute.objects.select_related('customer', 'transaction', 'merchant').prefetch_related('evidence_files').filter(customer=user)
+        return Dispute.objects.none()
 
     def filter_queryset(self, queryset):
         params = self.request.query_params
@@ -720,12 +887,32 @@ class DisputeViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
         if not txn and str(txn_id).isdigit():
             txn = Transaction.objects.filter(id=int(txn_id)).first()
 
-        serializer.save(
+        dispute = serializer.save(
             customer=user if user.role == 'customer' else None,
             customer_name=user.name or (user.email.split('@')[0] if user.email else 'Customer'),
             transaction=txn,
             merchant=txn.merchant if txn else None,
         )
+
+        # Notify merchant and analysts
+        if txn and txn.merchant:
+            merchant_users = User.objects.filter(role='merchant', merchant=txn.merchant)
+            for m in merchant_users:
+                Notification.objects.create(
+                    user=m,
+                    type='dispute',
+                    title='New Dispute Filed',
+                    body=f"A new dispute was filed for transaction {txn.public_id} ({txn.amount_inr} INR).",
+                    link="/disputes",
+                )
+        for a in User.objects.filter(role='analyst'):
+            Notification.objects.create(
+                user=a,
+                type='dispute',
+                title='New Dispute Filed',
+                body=f"Dispute #{dispute.id} filed for transaction {txn.public_id if txn else ''}.",
+                link="/disputes",
+            )
 
     @action(detail=True, methods=['patch'], url_path='status')
     def update_status(self, request, pk=None):
@@ -740,15 +927,23 @@ class DisputeViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
     def upload_evidence(self, request, pk=None):
         dispute = self.get_object()
         files = request.FILES.getlist('files')
-        notes = request.data.get('notes', '')
+        if not files and 'file' in request.FILES:
+            files = [request.FILES['file']]
 
+        notes = request.data.get('notes', '')
         if notes:
             dispute.evidence_notes = f"{dispute.evidence_notes}\n{notes}".strip()
 
         for f in files:
+            validate_evidence_file(f)
+
+        for f in files:
+            ext = os.path.splitext(f.name)[1].lower()
+            random_filename = f"evidence/{uuid.uuid4().hex}{ext}"
+            saved_rel_path = default_storage.save(random_filename, f)
             DisputeEvidence.objects.create(
                 dispute=dispute,
-                file=f,
+                file=saved_rel_path,
                 original_name=f.name,
                 uploaded_by=request.user,
             )
@@ -758,16 +953,170 @@ class DisputeViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
             dispute.stage = 'evidence'
         dispute.save()
 
+        # Notify the other side
+        if request.user.role == 'merchant':
+            if dispute.customer:
+                Notification.objects.create(
+                    user=dispute.customer,
+                    type='dispute',
+                    title="Evidence Uploaded to Dispute",
+                    body=f"Merchant uploaded evidence for dispute on transaction {dispute.transaction.public_id}.",
+                    link=f"/disputes/{dispute.id}",
+                )
+        else:
+            if dispute.merchant:
+                for m in User.objects.filter(role='merchant', merchant=dispute.merchant):
+                    Notification.objects.create(
+                        user=m,
+                        type='dispute',
+                        title="Evidence Uploaded to Dispute",
+                        body=f"Evidence was uploaded for dispute on transaction {dispute.transaction.public_id}.",
+                        link=f"/disputes/{dispute.id}",
+                    )
+
+        return Response(self.get_serializer(dispute).data)
+
+    @action(detail=True, methods=['get'], url_path=r'evidence/(?P<evidence_id>[^/.]+)')
+    def download_evidence(self, request, pk=None, evidence_id=None):
+        dispute = self.get_object()
+        try:
+            evidence = dispute.evidence_files.get(id=evidence_id)
+        except DisputeEvidence.DoesNotExist:
+            raise Http404("Evidence file not found.")
+
+        content_type, _ = mimetypes.guess_type(evidence.original_name)
+        if not content_type:
+            content_type = 'application/octet-stream'
+
+        response = FileResponse(evidence.file.open('rb'), content_type=content_type)
+        response['Content-Disposition'] = f'inline; filename="{evidence.original_name}"'
+        return response
+
+    @action(detail=True, methods=['post'], url_path='advance')
+    def advance(self, request, pk=None):
+        dispute = self.get_object()
+        user = request.user
+
+        # Only owning merchant or admin may call advance
+        is_admin = user.role == 'admin' or user.is_superuser
+        is_owner_merchant = user.role == 'merchant' and (
+            dispute.merchant == getattr(user, 'merchant', None) or
+            (user.organisation and dispute.merchant and dispute.merchant.name == user.organisation)
+        )
+
+        if not (is_admin or is_owner_merchant):
+            raise PermissionDenied("Only the owning merchant or an administrator may advance dispute stages.")
+
+        stage_order = ['opened', 'evidence', 'review', 'resolved']
+        current_stage = dispute.stage.lower()
+        if current_stage == 'resolved':
+            raise ValidationError({'stage': 'Dispute is already resolved and cannot be advanced further.'})
+
+        curr_idx = stage_order.index(current_stage) if current_stage in stage_order else 0
+        next_stage = stage_order[curr_idx + 1]
+
+        # Only admin sets the final outcome
+        if next_stage == 'resolved':
+            if not is_admin:
+                raise PermissionDenied("Only an administrator can advance to resolved and set the final outcome.")
+            outcome = request.data.get('outcome', 'merchant_won')
+            dispute.outcome = outcome
+            dispute.status = 'Resolved'
+        elif next_stage == 'evidence':
+            dispute.status = 'Evidence Submitted'
+        elif next_stage == 'review':
+            dispute.status = 'Under Review'
+
+        dispute.stage = next_stage
+        dispute.save()
+
+        # Notify the other side at each stage
+        if user.role == 'merchant':
+            if dispute.customer:
+                Notification.objects.create(
+                    user=dispute.customer,
+                    type='dispute',
+                    title=f"Dispute Update: Stage '{next_stage.title()}'",
+                    body=f"Your dispute for transaction {dispute.transaction.public_id} moved to stage '{next_stage}'.",
+                    link=f"/disputes/{dispute.id}",
+                )
+        else:
+            if dispute.customer:
+                Notification.objects.create(
+                    user=dispute.customer,
+                    type='dispute',
+                    title=f"Dispute Update: Stage '{next_stage.title()}'",
+                    body=f"Your dispute for transaction {dispute.transaction.public_id} advanced to stage '{next_stage}'." + (f" Outcome: {dispute.outcome}." if dispute.outcome else ""),
+                    link=f"/disputes/{dispute.id}",
+                )
+            if dispute.merchant:
+                for m in User.objects.filter(role='merchant', merchant=dispute.merchant):
+                    Notification.objects.create(
+                        user=m,
+                        type='dispute',
+                        title=f"Dispute Update: Stage '{next_stage.title()}'",
+                        body=f"Dispute for transaction {dispute.transaction.public_id} advanced to stage '{next_stage}'." + (f" Outcome: {dispute.outcome}." if dispute.outcome else ""),
+                        link=f"/disputes/{dispute.id}",
+                    )
+
+        AuditLog.objects.create(
+            actor=user.email,
+            role=user.role,
+            action=f"DISPUTE_ADVANCED_{next_stage.upper()}",
+            target=f"Dispute #{dispute.id}",
+            status="SUCCESS",
+            details=f"Dispute #{dispute.id} advanced to {next_stage}. Outcome: {dispute.outcome or 'none'}",
+            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+        )
+
         return Response(self.get_serializer(dispute).data)
 
 
 class NotificationViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
+    """
+    User notification center:
+    List: only logged-in user, returns unreadCount in response.
+    PATCH isRead: mark read.
+    POST mark-all-read / read-all: mark all read.
+    """
     permission_classes = [IsAuthenticated]
     serializer_class = NotificationSerializer
     queryset = Notification.objects.select_related('user').all()
 
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Notification.objects.none()
+        return Notification.objects.filter(user=user).order_by('-created_at')
+
     def filter_queryset(self, queryset):
         return queryset.order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        unread_count = Notification.objects.filter(user=request.user, is_read=False).count()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            resp = self.get_paginated_response(serializer.data)
+            resp.data['unreadCount'] = unread_count
+            return resp
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': queryset.count(),
+            'unreadCount': unread_count,
+        })
+
+    def partial_update(self, request, *args, **kwargs):
+        notif = self.get_object()
+        is_read = request.data.get('isRead')
+        if is_read is None:
+            is_read = request.data.get('is_read', True)
+        notif.is_read = bool(is_read)
+        notif.save()
+        return Response(self.get_serializer(notif).data)
 
     @action(detail=True, methods=['patch'], url_path='read')
     def mark_read(self, request, pk=None):
@@ -778,10 +1127,10 @@ class NotificationViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='mark-all-read')
     def mark_all_read(self, request):
-        qs = self.get_queryset()
-        qs.update(is_read=True)
-        return Response({'success': True})
+        Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+        return Response({'success': True, 'unreadCount': 0})
 
     @action(detail=False, methods=['post'], url_path='read-all')
     def read_all(self, request):
         return self.mark_all_read(request)
+

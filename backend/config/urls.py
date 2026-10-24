@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/', include('apps.fraud.urls')),
     path('api/', include('apps.ml.urls')),
     path('api/', include('apps.stats.urls')),
+    path('api/', include('apps.reports.urls')),
 
     # Root mirror fallback for convenience
     path('', include('apps.accounts.urls')),
@@ -24,7 +25,29 @@ urlpatterns = [
     path('', include('apps.fraud.urls')),
     path('', include('apps.ml.urls')),
     path('', include('apps.stats.urls')),
+    path('', include('apps.reports.urls')),
+]
+
+from django.http import Http404
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+
+class DebugSpectacularAPIView(SpectacularAPIView):
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.DEBUG:
+            raise Http404("Interactive docs are available only when DEBUG is True.")
+        return super().dispatch(request, *args, **kwargs)
+
+class DebugSwaggerView(SpectacularSwaggerView):
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.DEBUG:
+            raise Http404("Interactive docs are available only when DEBUG is True.")
+        return super().dispatch(request, *args, **kwargs)
+
+urlpatterns += [
+    path('api/schema/', DebugSpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', DebugSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 ]
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+

@@ -185,9 +185,12 @@ export async function batchScoreTransactions(rows) {
 
 let _liveLastTimestamp = null
 
-export async function getLiveTransactions() {
+export async function getLiveTransactions(since) {
   if (!USE_MOCK) {
-    const params = _liveLastTimestamp ? { since: _liveLastTimestamp } : { ordering: '-timestamp', pageSize: 10 }
+    const timestamp = since !== undefined ? since : _liveLastTimestamp
+    const params = timestamp
+      ? { since: timestamp, ordering: '-timestamp' }
+      : { ordering: '-timestamp', pageSize: 10 }
     const { data } = await apiClient.get('/transactions/', { params })
     if (data.results?.length) {
       _liveLastTimestamp = data.results[0].timestamp
@@ -198,8 +201,9 @@ export async function getLiveTransactions() {
   // Mock: simulate new transaction(s) arriving occasionally
   await delay(100, 300)
   const now    = new Date().toISOString()
+  const thresholdTime = since !== undefined ? since : _liveLastTimestamp
   const recent = mockStore.transactions.filter(
-    (t) => !_liveLastTimestamp || t.timestamp > _liveLastTimestamp,
+    (t) => !thresholdTime || t.timestamp > thresholdTime,
   ).slice(0, 5)
 
   _liveLastTimestamp = now

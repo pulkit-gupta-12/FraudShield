@@ -432,6 +432,8 @@ def process_transaction(
     scoring_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
     band_val = band(risk_score, threshold=t_val, review_floor=rf_val)
     status_val = status_for(band_val)
+    if transaction.card and transaction.card.status == 'blocked':
+        status_val = 'blocked'
 
     transaction.risk_score = round(risk_score, 4)
     transaction.scoring_ms = scoring_ms

@@ -54,23 +54,94 @@ export async function triggerRetraining() {
   }
 }
 
-// PATCH /api/model/thresholds/  body: { suspicious, fraud }
-export async function updateThresholds(suspicious, fraud) {
+// GET /api/model/what-if/?threshold=<val>
+export async function getModelWhatIf(threshold) {
   if (!USE_MOCK) {
-    const { data } = await apiClient.patch('/model/thresholds/', {
-      suspicious: Number(suspicious),
-      fraud:      Number(fraud),
-    })
+    const params = threshold !== undefined ? { threshold } : {}
+    const { data } = await apiClient.get('/model/what-if/', { params })
+    return data
+  }
+
+  await delay(200, 350)
+  const txns = mockStore.transactions || []
+  const tVal = Number(threshold)
+  let flagged = 0
+  let caught = 0
+  let falseAlarms = 0
+  let totalFraud = 0
+  txns.forEach((t) => {
+    const isActualFraud = t.trueLabel === 'FRAUD' || (t.trueLabel == null && (t.riskScore ?? 0) >= 0.89)
+    if (isActualFraud) totalFraud++
+    if ((t.riskScore ?? 0) >= tVal) {
+      flagged++
+      if (isActualFraud) caught++
+      else falseAlarms++
+    }
+  })
+  const precision = flagged > 0 ? Number((caught / flagged).toFixed(4)) : 0
+  const recall = totalFraud > 0 ? Number((caught / totalFraud).toFixed(4)) : 0
+  return {
+    threshold: tVal,
+    totalEvaluated: txns.length,
+    flagged,
+    caught,
+    falseAlarms,
+    precision,
+    recall,
+  }
+}
+
+// PUT /api/model/threshold/  body: { threshold, reviewFloor }
+export async function updateThresholds(arg1, arg2) {
+  let thresholdVal
+  let reviewFloorVal
+
+  if (typeof arg1 === 'object' && arg1 !== null) {
+    thresholdVal = arg1.threshold ?? arg1.fraud
+    reviewFloorVal = arg1.reviewFloor ?? arg1.suspicious ?? arg1.review_floor
+  } else {
+    // If called as (reviewFloor, threshold) where reviewFloor < threshold
+    const num1 = Number(arg1)
+    const num2 = Number(arg2)
+    if (num1 < num2) {
+      reviewFloorVal = num1
+      thresholdVal = num2
+    } else {
+      thresholdVal = num1
+      reviewFloorVal = num2
+    }
+  }
+
+  if (!USE_MOCK) {
+    const payload = {
+      threshold: Number(thresholdVal),
+    }
+    if (reviewFloorVal !== undefined && !isNaN(reviewFloorVal)) {
+      payload.reviewFloor = Number(reviewFloorVal)
+    }
+
+    const { data } = await apiClient.put('/model/threshold/', payload)
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('threshold-updated', {
+        detail: {
+          suspicious: Number(reviewFloorVal),
+          fraud: Number(thresholdVal),
+          reviewFloor: Number(reviewFloorVal),
+          threshold: Number(thresholdVal),
+        },
+      }))
+    }
     return data
   }
 
   await delay(300, 500)
-  mockStore.config.suspiciousThreshold = Number(suspicious)
-  mockStore.config.fraudThreshold      = Number(fraud)
-  mockStore.config.reviewFloor         = Number(suspicious)
-  mockStore.config.threshold           = Number(fraud)
-  mockStore.THRESHOLD                  = Number(fraud)
-  mockStore.REVIEW_FLOOR               = Number(suspicious)
+  mockStore.config.suspiciousThreshold = Number(reviewFloorVal)
+  mockStore.config.fraudThreshold      = Number(thresholdVal)
+  mockStore.config.reviewFloor         = Number(reviewFloorVal)
+  mockStore.config.threshold           = Number(thresholdVal)
+  mockStore.THRESHOLD                  = Number(thresholdVal)
+  mockStore.REVIEW_FLOOR               = Number(reviewFloorVal)
 
   mockStore.auditLogs.unshift({
     id:        `LOG-${Date.now()}`,
@@ -81,16 +152,16 @@ export async function updateThresholds(suspicious, fraud) {
     target:    'RiskEngine',
     ipAddress: '103.44.11.1',
     status:    'SUCCESS',
-    details:   `Updated risk thresholds: reviewFloor=${suspicious}, threshold=${fraud}. Recalibrated precision/recall trade-off.`,
+    details:   `Updated risk thresholds: reviewFloor=${reviewFloorVal}, threshold=${thresholdVal}. Recalibrated precision/recall trade-off.`,
   })
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('threshold-updated', {
       detail: {
-        suspicious: Number(suspicious),
-        fraud: Number(fraud),
-        reviewFloor: Number(suspicious),
-        threshold: Number(fraud),
+        suspicious: Number(reviewFloorVal),
+        fraud: Number(thresholdVal),
+        reviewFloor: Number(reviewFloorVal),
+        threshold: Number(thresholdVal),
       },
     }))
   }

@@ -18,5 +18,6 @@ router.register(r'disputes', DisputeViewSet, basename='dispute')
 router.register(r'notifications', NotificationViewSet, basename='notification')
 
 urlpatterns = [
+    path('disputes/<int:pk>/evidence/<int:evidence_id>/', DisputeViewSet.as_view({'get': 'download_evidence'}), name='dispute_evidence_download'),
     path('', include(router.urls)),
 ]

@@ -126,6 +126,16 @@ class Command(BaseCommand):
             User.objects.all().delete()
             Merchant.objects.all().delete()
             self.stdout.write(self.style.SUCCESS("All tables cleared successfully."))
+        elif Transaction.objects.exists():
+            self.stdout.write("Existing transactions found, refreshing transaction and investigation tables...")
+            DisputeEvidence.objects.all().delete()
+            Dispute.objects.all().delete()
+            CaseNote.objects.all().delete()
+            CaseEvent.objects.all().delete()
+            Case.objects.all().delete()
+            Alert.objects.all().delete()
+            Transaction.objects.all().delete()
+            Card.objects.all().delete()
 
         # 1. Load ModelConfig & ML files
         ml_dir = Path(getattr(settings, 'ML_DIR', Path(__file__).resolve().parent.parent.parent.parent / 'ml'))
@@ -214,11 +224,12 @@ class Command(BaseCommand):
                 u.save()
                 demo_users_map[em] = u
 
-        demo_customer = demo_users_map["customer@fraudshield.com"]
-        demo_analyst = demo_users_map["analyst@fraudshield.com"]
+        demo_customer = demo_users_map["customer@fraudshield.io"]
+        demo_customer_alt = demo_users_map["customer@fraudshield.com"]
+        demo_analyst = demo_users_map["analyst@fraudshield.io"]
 
         # 4. Seed 36 Additional Users: 28 customers, 4 analysts, 3 merchant users, 1 extra admin
-        customers = [demo_customer]
+        customers = [demo_customer, demo_customer_alt]
         for i, c_name in enumerate(CUSTOMER_NAMES):
             email = f"customer.{c_name.lower().replace(' ', '.')}.{i+1}@fraudshield.io"
             u, _ = User.objects.get_or_create(

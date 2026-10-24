@@ -15,7 +15,7 @@ import {
   Trash2,
   Paperclip,
 } from 'lucide-react'
-import { getDisputes, uploadDisputeEvidence, updateDisputeStatus } from '../../services/disputes.js'
+import { getDisputes, uploadDisputeEvidence, updateDisputeStatus, downloadDisputeEvidence } from '../../services/disputes.js'
 import { getOverviewStats } from '../../services/stats.js'
 import { StatCard } from '../../components/ui/StatCard.jsx'
 import { DataTable } from '../../components/ui/DataTable.jsx'
@@ -371,6 +371,33 @@ export function MerchantChargebacksPage() {
                 <span className="text-neutral-700">{selectedDispute.reason}</span>
               </div>
             </div>
+
+            {/* Existing Evidence Files */}
+            {(selectedDispute.evidenceFiles || selectedDispute.evidence_files)?.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-neutral-700">
+                  Existing Uploaded Evidence (Click to Download)
+                </label>
+                <div className="space-y-1.5">
+                  {(selectedDispute.evidenceFiles || selectedDispute.evidence_files).map((ev) => (
+                    <button
+                      key={ev.id}
+                      type="button"
+                      onClick={() => downloadDisputeEvidence(selectedDispute.id, ev.id, ev.originalName || ev.original_name || ev.name)}
+                      className="w-full flex items-center justify-between p-2 rounded-lg bg-primary-50/50 hover:bg-primary-100/60 border border-primary-200 text-xs text-primary-800 transition"
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <FileText className="w-4 h-4 text-primary-600 shrink-0" />
+                        <span className="font-semibold truncate">{ev.originalName || ev.original_name || ev.name}</span>
+                      </div>
+                      <span className="text-[10px] bg-primary-200/80 px-2 py-0.5 rounded font-mono text-primary-900 shrink-0">
+                        Download
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* File Dropzone */}
             <div>

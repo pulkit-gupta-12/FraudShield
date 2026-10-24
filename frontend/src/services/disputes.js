@@ -144,3 +144,38 @@ export async function uploadDisputeEvidence(id, { files = [], notes = '' } = {})
   return d
 }
 
+// GET /api/disputes/{id}/evidence/{evidenceId}/
+// Downloads the evidence file as a blob through the authenticated endpoint
+export async function downloadDisputeEvidence(disputeId, evidenceId, filename = 'evidence_document') {
+  if (!USE_MOCK) {
+    const response = await apiClient.get(`/disputes/${disputeId}/evidence/${evidenceId}/`, {
+      responseType: 'blob',
+    })
+    const blob = new Blob([response.data], {
+      type: response.headers['content-type'] || 'application/octet-stream',
+    })
+    const downloadUrl = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(downloadUrl)
+    return blob
+  }
+
+  await delay(200, 400)
+  const dummyContent = 'Mock dispute evidence document content'
+  const blob = new Blob([dummyContent], { type: 'text/plain' })
+  const downloadUrl = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = downloadUrl
+  link.download = filename || 'mock_evidence.txt'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(downloadUrl)
+  return blob
+}
+

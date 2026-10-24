@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'django_filters',
+    'drf_spectacular',
 
     # Local apps
     'apps.accounts.apps.AccountsConfig',
@@ -162,6 +163,15 @@ REST_FRAMEWORK = {
         'register': '5/min',
         'forgot_password': '3/min',
     },
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'FraudShield API',
+    'DESCRIPTION': 'Real-time financial fraud detection, telemetry, and forensic investigation API.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
 }
 
 # Simple JWT Settings
@@ -186,10 +196,10 @@ cors_origins_env = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()]
 CORS_ALLOW_CREDENTIALS = True
 
-# Security Headers & Cookie Flags
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 SECURE_BROWSER_XSS_FILTER = True
+SILENCED_SYSTEM_CHECKS = ['drf_spectacular.W001', 'drf_spectacular.W002']
 
 if not DEBUG:
     SECURE_SSL_REDIRECT = True

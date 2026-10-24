@@ -16,6 +16,7 @@ export function LoginPage() {
   const [rememberMe, setRememberMe] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [errorType, setErrorType] = useState('general') // 'general' | 'pending' | 'disabled' | 'throttled'
   const [validationErrors, setValidationErrors] = useState({})
 
   useEffect(() => {
@@ -43,9 +44,34 @@ export function LoginPage() {
     return Object.keys(errors).length === 0
   }
 
+  const handleLoginError = (err) => {
+    const rawMsg = err.message || 'Invalid email or password. Please check your credentials.'
+    let type = 'general'
+    let displayMsg = rawMsg
+
+    const lower = rawMsg.toLowerCase()
+    if (err.status === 429 || lower.includes('throttle') || lower.includes('too many requests')) {
+      type = 'throttled'
+      displayMsg = lower.includes('expected available in')
+        ? rawMsg
+        : 'Request was throttled: Too many login attempts. Please wait a moment before trying again.'
+    } else if (lower.includes('pending')) {
+      type = 'pending'
+      displayMsg = 'Your account registration is currently pending administrator approval. Please wait for an administrator to activate your account.'
+    } else if (lower.includes('deactivated') || lower.includes('disabled') || lower.includes('suspended')) {
+      type = 'disabled'
+      displayMsg = 'Your account has been deactivated or suspended. Please contact system support.'
+    }
+
+    setErrorType(type)
+    setError(displayMsg)
+    toast.error(displayMsg)
+  }
+
   const handleLogin = async (e) => {
     if (e) e.preventDefault()
     setError('')
+    setErrorType('general')
 
     if (!validateForm()) {
       return
@@ -58,9 +84,7 @@ export function LoginPage() {
       const dest = from || getRoleDashboardPath(user.role)
       navigate(dest, { replace: true })
     } catch (err) {
-      const msg = err.message || 'Invalid email or password. Please check your credentials.'
-      setError(msg)
-      toast.error(msg)
+      handleLoginError(err)
     } finally {
       setLoading(false)
     }
@@ -71,6 +95,7 @@ export function LoginPage() {
     setEmail(demoAccount.email)
     setPassword(demoAccount.password)
     setError('')
+    setErrorType('general')
     setValidationErrors({})
     setLoading(true)
     try {
@@ -79,9 +104,7 @@ export function LoginPage() {
       const dest = getRoleDashboardPath(user.role)
       navigate(dest, { replace: true })
     } catch (err) {
-      const msg = err.message || 'Quick login failed'
-      setError(msg)
-      toast.error(msg)
+      handleLoginError(err)
     } finally {
       setLoading(false)
     }
@@ -132,11 +155,31 @@ export function LoginPage() {
       {error && (
         <div
           id="login-error-banner"
-          className="mb-4 p-3.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-start gap-2.5 animate-shake"
+          className={`mb-4 p-3.5 border text-xs rounded-xl flex items-start gap-2.5 animate-shake ${
+            errorType === 'pending'
+              ? 'bg-amber-50 border-amber-200 text-amber-800'
+              : errorType === 'throttled'
+              ? 'bg-orange-50 border-orange-200 text-orange-800'
+              : 'bg-red-50 border-red-200 text-red-700'
+          }`}
         >
-          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${
+            errorType === 'pending'
+              ? 'text-amber-600'
+              : errorType === 'throttled'
+              ? 'text-orange-600'
+              : 'text-red-600'
+          }`} />
           <div>
-            <span className="font-bold">Authentication failed: </span>
+            <span className="font-bold">
+              {errorType === 'pending'
+                ? 'Approval Pending: '
+                : errorType === 'throttled'
+                ? 'Rate Limit Exceeded: '
+                : errorType === 'disabled'
+                ? 'Account Suspended: '
+                : 'Authentication failed: '}
+            </span>
             {error}
           </div>
         </div>

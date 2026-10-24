@@ -420,7 +420,7 @@ Every viewset in the backend enforces **queryset scoping** via `ScopedQuerySetMi
 ### 5.1 List Cards
 - **Method:** `GET`
 - **URL:** `/api/cards/`
-- **Roles:** customer (only their own cards), admin, analyst
+- **Roles:** customer (only their own cards), admin (all cards)
 - **Query Params:** `page`, `pageSize`, `search`, `ordering`, `userId`, `status`
 - **Response Shape (200 OK):**
   ```json
@@ -444,16 +444,23 @@ Every viewset in the backend enforces **queryset scoping** via `ScopedQuerySetMi
   }
   ```
 
-### 5.2 Update Card Status
+### 5.2 Update Card (Owner or Admin)
 - **Method:** `PATCH`
-- **URL:** `/api/cards/{id}/status/` (or `PATCH /api/cards/{id}/`)
-- **Roles:** customer (owner only), admin
+- **URL:** `/api/cards/{id}/` (or `/api/cards/{id}/status/`)
+- **Roles:** customer (owner only — 404 for other users' cards), admin
 - **Request Body:**
   ```json
   {
-    "status": "blocked"
+    "status": "blocked",
+    "spendingLimit": 200000.0,
+    "travelNotice": true
   }
   ```
+- **Rules & Invariants:**
+  - `status`: Must be `"active"` or `"blocked"`. Blocking or unblocking writes an `AuditLog` entry (`CARD_BLOCKED` or `CARD_UNBLOCKED`) and triggers a `Notification` to the cardholder.
+  - `spendingLimit`: Must be a positive number (> 0) with a maximum of 10,000,000 INR.
+  - `travelNotice`: Boolean flag.
+  - **Blocked Card Transaction Invariant**: Any transaction processed or created on a card with `status == "blocked"` is automatically saved with `status = "blocked"` and high risk band.
 - **Response Shape (200 OK):** Updated Card object.
 
 ---
@@ -463,7 +470,7 @@ Every viewset in the backend enforces **queryset scoping** via `ScopedQuerySetMi
 ### 6.1 List Disputes
 - **Method:** `GET`
 - **URL:** `/api/disputes/`
-- **Roles:** customer (own), merchant (own), admin, analyst
+- **Roles:** merchant (own merchant only), admin (all), customer (own)
 - **Query Params:** `page`, `pageSize`, `search`, `ordering`, `status`, `customerId`
 - **Response Shape (200 OK):**
   ```json
@@ -479,6 +486,7 @@ Every viewset in the backend enforces **queryset scoping** via `ScopedQuerySetMi
         "reason": "Fraudulent charge",
         "status": "Submitted",
         "stage": "opened",
+        "outcome": "",
         "filedAt": "2026-10-14T10:00:00Z",
         "evidenceNotes": "Card was cloned"
       }
@@ -502,26 +510,45 @@ Every viewset in the backend enforces **queryset scoping** via `ScopedQuerySetMi
     "evidenceNotes": "Card was cloned"
   }
   ```
-- **Response Shape (201 Created):** Created Dispute object.
+- **Response Shape (201 Created):** Created Dispute object. Automatically notifies merchant and fraud analysts.
 
-### 6.3 Update Dispute Status
-- **Method:** `PATCH`
-- **URL:** `/api/disputes/{id}/status/` (or `PATCH /api/disputes/{id}/`)
-- **Roles:** admin, analyst, merchant
+### 6.3 Upload Dispute Evidence
+- **Method:** `POST`
+- **URL:** `/api/disputes/{id}/evidence/`
+- **Roles:** merchant (own), customer (own), admin
+- **Request Body:** `multipart/form-data` with:
+  - `files`: list of file binaries (PDF, PNG, JPG only)
+  - `notes`: optional string
+- **Validation & Security Rules:**
+  - Files allowed: `.pdf`, `.png`, `.jpg`, `.jpeg`.
+  - Signature verification: real magic bytes verified (`%PDF-`, `\x89PNG`, `\xff\xd8\xff`). Fake extensions rejected with 400 Bad Request.
+  - Max file size: 5 MB (5,242,880 bytes).
+  - Storage: saved under `MEDIA_ROOT/evidence/` with a cryptographically secure random UUID filename.
+  - Automatically notifies the opposite party.
+- **Response Shape (200 OK):** Updated Dispute object with attached `evidenceFiles`.
+
+### 6.4 Download Dispute Evidence (Authenticated)
+- **Method:** `GET`
+- **URL:** `/api/disputes/{id}/evidence/{evidenceId}/`
+- **Roles:** Authenticated (owner merchant, customer, or admin only; 404 for unauthorized users)
+- **Response:** File stream with proper mime-type and `Content-Disposition`. Direct unauthenticated file serving is blocked.
+
+### 6.5 Advance Dispute Stage
+- **Method:** `POST`
+- **URL:** `/api/disputes/{id}/advance/`
+- **Roles:** Owning merchant or admin only. (Other roles receive 403 Forbidden).
 - **Request Body:**
   ```json
   {
-    "status": "Under Review"
+    "outcome": "merchant_won"
   }
   ```
+- **Rules & Invariants:**
+  - Ordered sequence: `opened` -> `evidence` -> `review` -> `resolved`.
+  - Only an **admin** may set the final `outcome` and advance to `resolved`. Merchants attempting to resolve receive 403 Forbidden.
+  - Cross-notification: automatically notifies the customer when merchant advances, or customer & merchant when admin advances.
+  - Generates forensic `AuditLog` entry.
 - **Response Shape (200 OK):** Updated Dispute object.
-
-### 6.4 Upload Dispute Evidence
-- **Method:** `POST`
-- **URL:** `/api/disputes/{id}/evidence/`
-- **Roles:** merchant, customer
-- **Request Body:** `multipart/form-data` with `files` (array of file binaries) and `notes` (string)
-- **Response Shape (200 OK):** Updated Dispute object with attached `evidenceFiles`.
 
 ---
 
@@ -899,34 +926,57 @@ All stats endpoints support the `range` parameter (`7d`, `30d`, `90d`) and enfor
   }
   ```
 
-### 9.2 Update User Role
-- **Method:** `PATCH`
-- **URL:** `/api/users/{id}/role/`
-- **Roles:** admin
-- **Request Body:** `{ "role": "analyst" }`
-- **Response Shape (200 OK):** Updated User object.
-
-### 9.3 Update User Status
-- **Method:** `PATCH`
-- **URL:** `/api/users/{id}/status/`
-- **Roles:** admin
-- **Request Body:** `{ "status": "suspended" }`
-- **Response Shape (200 OK):** Updated User object.
-
-### 9.4 Invite User
+### 9.2 Create User
 - **Method:** `POST`
-- **URL:** `/api/users/invite/`
+- **URL:** `/api/users/`
 - **Roles:** admin
 - **Request Body:**
   ```json
   {
     "email": "analyst.new@fraudshield.io",
-    "role": "analyst",
     "name": "New Analyst",
-    "department": "Risk Operations"
+    "role": "analyst",
+    "department": "Risk Operations",
+    "city": "Mumbai"
   }
   ```
-- **Response Shape (201 Created):** Created User object.
+- **Rules:** Email must be unique. Generates a cryptographically strong temporary password returned once in `temporaryPassword`. Creates forensic audit log.
+- **Response Shape (201 Created):**
+  ```json
+  {
+    "id": 12,
+    "email": "analyst.new@fraudshield.io",
+    "name": "New Analyst",
+    "role": "analyst",
+    "department": "Risk Operations",
+    "city": "Mumbai",
+    "status": "active",
+    "isActive": true,
+    "temporaryPassword": "X7!b9Q#mP$2v"
+  }
+  ```
+
+### 9.3 Update User & Invariant Rules
+- **Method:** `PATCH`
+- **URL:** `/api/users/{id}/` (or `/api/users/{id}/role/`, `/api/users/{id}/status/`)
+- **Roles:** admin
+- **Request Body:**
+  ```json
+  {
+    "role": "analyst",
+    "isActive": false
+  }
+  ```
+- **Invariants & Protection Rules:**
+  1. An admin cannot deactivate (`isActive: false` / `status: "suspended"`) or demote (`role != "admin"`) themselves.
+  2. The last active administrator in the system can never be removed, deactivated, or demoted. Violations return 400 Bad Request.
+  3. Every status or role modification writes an immutable `AuditLog` entry.
+- **Response Shape (200 OK):** Updated User object.
+
+### 9.4 Access Requests
+- **List Access Requests:** `GET /api/users/access-requests/` (admin only). Returns list of pending user registrations.
+- **Approve Access Request:** `POST /api/users/{id}/approve/` (admin only). Activates user (`status: "active"`, `isActive: true`), triggers in-app notification to the approved user, and logs audit record.
+- **Reject Access Request:** `POST /api/users/{id}/reject/` (admin only). Sets `status: "rejected"`, `isActive: false`, logs audit record.
 
 ---
 
@@ -935,7 +985,7 @@ All stats endpoints support the `range` parameter (`7d`, `30d`, `90d`) and enfor
 ### 10.1 List Notifications
 - **Method:** `GET`
 - **URL:** `/api/notifications/`
-- **Roles:** Authenticated (scoped to user's notifications)
+- **Roles:** Authenticated (scoped strictly to the logged-in user's notifications)
 - **Response Shape (200 OK):**
   ```json
   {
@@ -951,13 +1001,14 @@ All stats endpoints support the `range` parameter (`7d`, `30d`, `90d`) and enfor
         "createdAt": "2026-10-14T09:35:00Z"
       }
     ],
-    "count": 1
+    "count": 1,
+    "unreadCount": 1
   }
   ```
 
 ### 10.2 Mark Notification Read
 - **Method:** `PATCH`
-- **URL:** `/api/notifications/{id}/read/` (or `PATCH /api/notifications/{id}/`)
+- **URL:** `/api/notifications/{id}/read/` (or `PATCH /api/notifications/{id}/` with `{ "isRead": true }`)
 - **Roles:** Authenticated (owner)
 - **Response Shape (200 OK):** Updated Notification object.
 
@@ -965,7 +1016,15 @@ All stats endpoints support the `range` parameter (`7d`, `30d`, `90d`) and enfor
 - **Method:** `POST`
 - **URL:** `/api/notifications/mark-all-read/` (or `POST /api/notifications/read-all/`)
 - **Roles:** Authenticated
-- **Response Shape (200 OK):** `{ "success": true }`.
+- **Response Shape (200 OK):** `{ "success": true, "unreadCount": 0 }`.
+
+### 10.4 Notification Generation Triggers
+Notifications are automatically dispatched for:
+- New alert (customer)
+- Case escalation and decisions (analysts and customer)
+- Dispute events (creation, evidence upload, stage transitions)
+- Threshold changes (all active admins)
+- Access requests (all active admins upon registration)
 
 ---
 
@@ -975,37 +1034,89 @@ All stats endpoints support the `range` parameter (`7d`, `30d`, `90d`) and enfor
 - **Method:** `GET`
 - **URL:** `/api/audit-logs/`
 - **Roles:** admin
-- **Query Params:** `page`, `pageSize`, `search`, `ordering`, `action`, `status`
+- **Query Params:** `page`, `pageSize`, `search`, `ordering`, `user` (or `userId`), `action`, `status`, `dateFrom`, `dateTo`
 - **Response Shape (200 OK):**
   ```json
   {
     "results": [
       {
         "id": 1,
-        "timestamp": "2026-10-14T10:00:00Z",
+        "createdAt": "2026-10-14T10:00:00Z",
         "actor": "admin@fraudshield.io",
-        "actorRole": "admin",
+        "role": "admin",
         "action": "CONFIG_UPDATE",
-        "target": "Thresholds",
+        "target": "ModelConfig",
         "ipAddress": "127.0.0.1",
         "status": "SUCCESS",
-        "details": "Updated risk thresholds: reviewFloor=0.5, threshold=0.65"
+        "details": { "threshold": 0.521 }
       }
     ],
     "count": 1
   }
   ```
 
-### 11.2 Record Audit Log
-- **Method:** `POST`
-- **URL:** `/api/audit-logs/`
-- **Roles:** Authenticated
-- **Request Body:** `{ "action": "...", "target": "...", "details": "..." }`
-- **Response Shape (201 Created):** Created AuditLog object.
+### 11.2 Export Audit Logs (CSV)
+- **Method:** `GET`
+- **URL:** `/api/audit-logs/export/` (or `GET /api/audit-logs/?format=csv`)
+- **Roles:** admin
+- **Auditing:** Every export call writes an immutable `AuditLog` entry (`action: "AUDIT_LOG_EXPORTED"`).
+- **Response:** CSV attachment `audit_logs.csv`.
 
 ---
 
-## 12. Health Check
+## 12. Reports Builder (`frontend/src/services/reports.js`)
+
+### 12.1 Report Builder
+- **Method:** `GET`
+- **URL:** `/api/reports/`
+- **Query Params:**
+  - `type`: Report type (required)
+  - `dateFrom`: Start timestamp / date (optional)
+  - `dateTo`: End timestamp / date (optional)
+  - `format`: `json` (default) or `csv`
+- **Role Scoping & Report Types:**
+  - **Admin**: `daily_summary`, `fraud_by_category`, `analyst_performance`, `model_performance`
+  - **Merchant**: `merchant_summary`, `merchant_chargebacks` (scoped strictly to user's merchant)
+  - Non-authorized roles receive 403 Forbidden.
+- **Response Shape (200 OK — JSON):**
+  ```json
+  {
+    "columns": ["date", "totalTransactions", "totalAmount", "fraudTransactions", "fraudAmount", "flaggedCount", "blockedCount"],
+    "rows": [
+      {
+        "date": "2026-10-14",
+        "totalTransactions": 150,
+        "totalAmount": 450000.0,
+        "fraudTransactions": 3,
+        "fraudAmount": 28000.0,
+        "flaggedCount": 8,
+        "blockedCount": 3
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "labels": ["2026-10-14"],
+      "datasets": [
+        { "name": "Total Transactions", "data": [150] },
+        { "name": "Fraud Transactions", "data": [3] }
+      ]
+    }
+  }
+  ```
+- **Response Shape (200 OK — CSV):** When `format=csv`, returns direct CSV stream attachment `report_{type}.csv`.
+
+---
+
+## 13. Interactive API Documentation (`drf-spectacular`)
+
+### 13.1 Swagger UI & Schema
+- **Interactive Swagger UI:** `GET /api/docs/`
+- **OpenAPI 3.0 Schema:** `GET /api/schema/`
+- **Availability:** Active and accessible strictly when `DEBUG = True`. Returns 404 Not Found in production when `DEBUG = False`.
+
+---
+
+## 14. Health Check
 - **Method:** `GET`
 - **URL:** `/api/health/`
 - **Roles:** Public

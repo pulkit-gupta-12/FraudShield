@@ -32,22 +32,23 @@ export function LiveFeedPage() {
   const isPausedRef = useRef(isPaused)
   isPausedRef.current = isPaused
 
+  const lastSinceRef = useRef(null)
+
   useEffect(() => {
     let isMounted = true
 
     const poll = async () => {
       if (isPausedRef.current) return
       try {
-        const res = await getLiveTransactions()
+        const res = await getLiveTransactions(lastSinceRef.current)
         if (isMounted && res?.results?.length) {
-          const fresh = res.results[0]
+          lastSinceRef.current = res.results[0].timestamp
           setFeed((prev) => {
-            // Deduplicate by ID
-            if (prev.some((item) => item.id === fresh.id)) return prev
-            const next = [fresh, ...prev].slice(0, 30)
-            return next
+            const newItems = res.results.filter((item) => !prev.some((p) => p.id === item.id))
+            if (!newItems.length) return prev
+            return [...newItems, ...prev].slice(0, 30)
           })
-          setTotalStreamed((count) => count + 1)
+          setTotalStreamed((count) => count + res.results.length)
         }
       } catch {
         // quiet poll fail
@@ -64,6 +65,7 @@ export function LiveFeedPage() {
     return () => {
       isMounted = false
       clearInterval(interval)
+      lastSinceRef.current = null
       resetLiveFeed()
     }
   }, [])

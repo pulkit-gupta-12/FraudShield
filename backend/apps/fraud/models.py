@@ -68,6 +68,11 @@ class Transaction(models.Model):
             models.Index(fields=['merchant']),
         ]
 
+    def save(self, *args, **kwargs):
+        if self.card and self.card.status == 'blocked' and self.status not in ('confirmed_fraud', 'confirmed_safe'):
+            self.status = 'blocked'
+        super().save(*args, **kwargs)
+
     def band(self, threshold=None, review_floor=None):
         if threshold is None or review_floor is None:
             from apps.ml.ml_service import ml_service

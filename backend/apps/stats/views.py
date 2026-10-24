@@ -53,6 +53,65 @@ def _parse_range_days(request, default_days=30):
     return default_days
 
 
+def _compute_feedback_and_case_metrics(scoped_txns=None):
+    from apps.ml.ml_service import ml_service
+    cfg = ml_service.get_config()
+    rf_val = cfg['review_floor']
+    t_val = cfg['threshold']
+
+    cases = Case.objects.all()
+    if scoped_txns is not None:
+        cases = cases.filter(transaction__in=scoped_txns)
+
+    confirmed_fraud = cases.filter(outcome='fraud').count()
+    if confirmed_fraud == 0:
+        if scoped_txns is not None:
+            confirmed_fraud = scoped_txns.filter(status='confirmed_fraud').count()
+        else:
+            confirmed_fraud = Transaction.objects.filter(status='confirmed_fraud').count()
+
+    false_alarms = cases.filter(
+        outcome='safe'
+    ).filter(
+        Q(transaction__risk_score__gte=rf_val) | Q(alert__isnull=False)
+    ).count()
+
+    missed_fraud = cases.filter(
+        outcome='fraud'
+    ).filter(
+        Q(transaction__risk_score__lt=rf_val) | Q(source='customer_report')
+    ).count()
+
+    # moneyProtected: sum of amounts of confirmed-fraud transactions that were blocked or declined
+    txns = scoped_txns if scoped_txns is not None else Transaction.objects.all()
+    prot_aggs = txns.filter(
+        Q(status='confirmed_fraud') | Q(cases__outcome='fraud')
+    ).filter(
+        Q(risk_score__gte=t_val) | Q(status__in=['blocked', 'declined']) | Q(factors__0__description__icontains='declined')
+    ).distinct().aggregate(protected=Sum('amount_inr'))
+    money_protected = float(prot_aggs['protected'] or 0.0)
+
+    # avgReviewMinutes: case created to closed
+    closed_cases = cases.filter(closed_at__isnull=False)
+    total_minutes = 0.0
+    count_closed = 0
+    for c in closed_cases:
+        if c.closed_at and c.created_at:
+            diff = (c.closed_at - c.created_at).total_seconds() / 60.0
+            if diff >= 0:
+                total_minutes += diff
+                count_closed += 1
+    avg_review_minutes = round(total_minutes / count_closed, 1) if count_closed > 0 else 0.0
+
+    return {
+        'confirmedFraud': confirmed_fraud,
+        'falseAlarms': false_alarms,
+        'missedFraud': missed_fraud,
+        'moneyProtected': money_protected,
+        'avgReviewMinutes': avg_review_minutes,
+    }
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def stats_overview(request):
@@ -95,7 +154,6 @@ def stats_overview(request):
 
     # Current totals
     total_txns = curr_aggs['total'] or 0
-    # If range is narrow and no transactions exist in window, fallback to all-time total count
     all_time_total = base_qs.count()
     effective_total = total_txns if total_txns > 0 else all_time_total
 
@@ -104,7 +162,7 @@ def stats_overview(request):
     legit_cnt = curr_aggs['legit_count'] or 0
     total_vol = float(curr_aggs['volume_inr'] or 0.0)
     fraud_vol = float(curr_aggs['fraud_volume'] or 0.0)
-    avg_detection_ms = round(float(curr_aggs['scoring_avg'] or 14.5), 1)
+    avg_detection_ms = round(float(curr_aggs['scoring_avg'] or 0.0), 1) if total_txns > 0 else 0.0
 
     fraud_rate = round((fraud_cnt / total_txns * 100.0), 2) if total_txns > 0 else (
         round((base_qs.filter(risk_score__gte=t_val).count() / all_time_total * 100.0), 2) if all_time_total > 0 else 0.0
@@ -138,6 +196,8 @@ def stats_overview(request):
         open_cases = Case.objects.filter(status__in=['Open', 'In Review', 'Escalated']).count()
         active_cards = Card.objects.filter(status='active').count()
 
+    feedback_metrics = _compute_feedback_and_case_metrics(base_qs if user.role in ['customer', 'merchant'] else None)
+
     return Response({
         'totalTransactions': effective_total,
         'transactionsToday': txns_today,
@@ -149,6 +209,11 @@ def stats_overview(request):
         'fraudVolumeINR': fraud_vol,
         'totalVolumeINR': total_vol,
         'amountSaved': fraud_vol,
+        'moneyProtected': feedback_metrics['moneyProtected'],
+        'confirmedFraud': feedback_metrics['confirmedFraud'],
+        'falseAlarms': feedback_metrics['falseAlarms'],
+        'missedFraud': feedback_metrics['missedFraud'],
+        'avgReviewMinutes': feedback_metrics['avgReviewMinutes'],
         'avgDetectionMs': avg_detection_ms,
         'activeAlerts': active_alerts,
         'openAlerts': active_alerts,
@@ -327,6 +392,9 @@ def stats_analyst(request):
     """
     analysts = User.objects.filter(role='analyst')
 
+    cfg = ml_service.get_config()
+    rf_val = cfg['review_floor']
+
     case_stats = (
         Case.objects
         .values('assignee_id')
@@ -342,12 +410,27 @@ def stats_analyst(request):
         entry = stat_map.get(a.id)
         tot = entry['total_cases'] if entry else 0
         res = entry['resolved'] if entry else 0
+
+        a_cases = Case.objects.filter(assignee=a)
+        a_closed = a_cases.filter(closed_at__isnull=False)
+        a_total_mins = sum(
+            max(0.0, (c.closed_at - c.created_at).total_seconds() / 60.0)
+            for c in a_closed if c.closed_at and c.created_at
+        )
+        a_cnt = a_closed.count()
+        a_avg_mins = round(a_total_mins / a_cnt, 1) if a_cnt > 0 else 0.0
+        a_avg_hrs = round(a_avg_mins / 60.0, 1)
+
         results.append({
             'analystId': a.id,
             'analystName': a.name or a.email.split('@')[0],
             'totalCases': tot,
             'resolved': res,
-            'avgResolutionHrs': 4.2,
+            'avgResolutionHrs': a_avg_hrs,
+            'avgReviewMinutes': a_avg_mins,
+            'confirmedFraud': a_cases.filter(outcome='fraud').count(),
+            'falseAlarms': a_cases.filter(outcome='safe', transaction__risk_score__gte=rf_val).count(),
+            'missedFraud': a_cases.filter(outcome='fraud', transaction__risk_score__lt=rf_val).count(),
         })
 
     return Response(results)

@@ -6,6 +6,7 @@ class Merchant(models.Model):
     name = models.CharField(max_length=255)
     category = models.CharField(max_length=100, default='General')
     city = models.CharField(max_length=100, default='Mumbai')
+    active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -40,6 +41,7 @@ class Transaction(models.Model):
         ('confirmed_fraud', 'Confirmed Fraud'),
         ('confirmed_safe', 'Confirmed Safe'),
         ('under_review', 'Under Review'),
+        ('declined', 'Declined'),
     ]
     public_id = models.CharField(max_length=50, unique=True, db_index=True)
     card = models.ForeignKey(Card, on_delete=models.CASCADE, related_name='transactions', null=True, blank=True)
@@ -50,7 +52,7 @@ class Transaction(models.Model):
     amount_inr = models.DecimalField(max_digits=12, decimal_places=2)
     city = models.CharField(max_length=100, default='Mumbai')
     timestamp = models.DateTimeField(default=timezone.now, db_index=True)
-    risk_score = models.FloatField(default=0.0, db_index=True)
+    risk_score = models.FloatField(default=0.0, db_index=True, null=True, blank=True)
     scoring_ms = models.FloatField(default=0.0)
     status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='approved', db_index=True)
     true_label = models.CharField(max_length=50, blank=True, null=True)
@@ -69,11 +71,15 @@ class Transaction(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        if self.card and self.card.status == 'blocked' and self.status not in ('confirmed_fraud', 'confirmed_safe'):
+        if self.card and self.card.status == 'blocked' and self.status not in ('confirmed_fraud', 'confirmed_safe', 'declined'):
             self.status = 'blocked'
         super().save(*args, **kwargs)
 
     def band(self, threshold=None, review_floor=None):
+        if self.status == 'declined':
+            return 'declined'
+        if self.risk_score is None:
+            return 'safe'
         if threshold is None or review_floor is None:
             from apps.ml.ml_service import ml_service
             cfg = ml_service.get_config()
@@ -209,6 +215,7 @@ class Case(models.Model):
         on_delete=models.SET_NULL,
         related_name='assigned_cases'
     )
+    source = models.CharField(max_length=50, default='system')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     closed_at = models.DateTimeField(null=True, blank=True)
@@ -313,3 +320,37 @@ class ModelConfig(models.Model):
 
     def __str__(self):
         return f"ModelConfig ({self.version}) - Threshold: {self.threshold}"
+
+
+class PatternProfile(models.Model):
+    code = models.CharField(max_length=20, unique=True, db_index=True)
+    label = models.CharField(max_length=255)
+    v_values = models.JSONField(default=list)
+    typical_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
+    typical_time = models.CharField(max_length=50, default='')
+    true_label = models.IntegerField(default=0)
+    base_score = models.FloatField(default=0.0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.code} - {self.label}"
+
+
+class CustomerReport(models.Model):
+    REASON_CHOICES = [
+        ('not_mine', 'Not Mine / Unauthorized'),
+        ('duplicate', 'Duplicate Charge'),
+        ('not_received', 'Goods/Services Not Received'),
+        ('wrong_amount', 'Incorrect Amount Charged'),
+        ('other', 'Other Reason'),
+    ]
+    transaction = models.OneToOneField(Transaction, on_delete=models.CASCADE, related_name='customer_report')
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='customer_reports')
+    reason = models.CharField(max_length=50, choices=REASON_CHOICES)
+    note = models.TextField(max_length=500)
+    case = models.ForeignKey(Case, null=True, blank=True, on_delete=models.SET_NULL, related_name='customer_reports')
+    dispute = models.ForeignKey(Dispute, null=True, blank=True, on_delete=models.SET_NULL, related_name='customer_reports')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Report on {self.transaction.public_id} by {self.customer.email}"

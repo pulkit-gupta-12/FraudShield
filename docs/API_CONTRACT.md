@@ -221,6 +221,166 @@ Every viewset in the backend enforces **queryset scoping** via `ScopedQuerySetMi
 - **Audit:** Writes an AuditLog entry with action `TRANSACTIONS_EXPORT_CSV`.
 - **Response Shape (200 OK):** `text/csv` stream with header `Content-Disposition: attachment; filename="transactions_export.csv"`.
 
+### 2.5 Submit Real Transaction
+- **Method:** `POST`
+- **URL:** `/api/transactions/submit/`
+- **Roles:**
+  - `customer`: own cards only (`source='customer_entry'`)
+  - `merchant`: own merchant only (`source='merchant_terminal'`); cards from `/api/pos/cards/`
+  - `admin`, `analyst`: any card (`source='staff_entry'`)
+- **Throttling:** 30 requests per minute per user.
+- **Request Body:**
+  ```json
+  {
+    "cardId": 1,
+    "merchantId": 2,
+    "amount": 14200.0,
+    "city": "Mumbai",
+    "occurredAt": "2026-10-25T10:30:00Z",
+    "patternId": 9,
+    "rawValues": null,
+    "note": "Optional demo submission note"
+  }
+  ```
+  *(Note: `rawValues` containing all 30 floats is permitted for admin and analyst only).*
+- **Order of Execution:**
+  1. Card status check: if not `active`, returns `decision='declined'` with `reason='card_blocked'`, stores transaction as `declined` with `riskScore=null`, writes audit log.
+  2. Spending limit check: if amount <= 0 or amount > card.spending_limit, returns `decision='declined'` with `reason='limit_exceeded'`, stores transaction as `declined`, writes audit log.
+  3. Feature Translation (`build_features`): maps INR amount to dataset scale (amount / 90.0) and local time to seconds since midnight; merges with pattern V-numbers.
+  4. Real Model Scoring: scores with XGBoost, applies dynamic thresholds from `ModelConfig`.
+  5. If flagged / review / high: automatically creates Alert, Case with initial timeline event, and notifies analysts & cardholder.
+- **Response Shape (200 OK or 201 Created):**
+  ```json
+  {
+    "transaction": {
+      "id": "TXN-839210",
+      "publicId": "TXN-839210",
+      "amount": 14200.0,
+      "riskScore": 0.0758,
+      "band": "safe",
+      "status": "approved"
+    },
+    "decision": "approved",
+    "reason": "approved",
+    "riskScore": 0.0758,
+    "band": "safe",
+    "threshold": 0.521,
+    "reviewFloor": 0.5,
+    "reasons": [
+      "The amount is consistent with typical profile transactions."
+    ],
+    "factors": [
+      { "name": "Amount", "impact": 0.04 }
+    ],
+    "alertId": null,
+    "caseId": null
+  }
+  ```
+  *(Note: `factors` is visible only to admin and analyst; customers and merchants receive friendly sentences in `reasons` without technical V-names).*
+
+### 2.6 Report Transaction (Customer Complaint)
+- **Method:** `POST`
+- **URL:** `/api/transactions/{id}/report/`
+- **Roles:** Card owner only (customer). Allowed once per transaction.
+- **Request Body:**
+  ```json
+  {
+    "reason": "not_mine",
+    "note": "I did not authorize this charge while card was in my possession."
+  }
+  ```
+  *(Accepted reasons: `not_mine`, `duplicate`, `not_received`, `wrong_amount`, `other`. Note required, max 500 chars).*
+- **Actions Triggered:**
+  - Creates `CustomerReport` record.
+  - Creates `Case` with `source='customer_report'` (enables tracking model misses on approved transactions).
+  - Creates `Alert` assigned to fraud investigation team.
+  - Creates `Dispute` for merchant with `stage='opened'`.
+  - Sends notifications to analysts and merchant.
+- **Response Shape (201 Created):**
+  ```json
+  {
+    "success": true,
+    "message": "Transaction reported successfully.",
+    "reportId": 1,
+    "caseId": 12,
+    "disputeId": 4,
+    "alertId": 15,
+    "report": {
+      "id": 1,
+      "transactionId": "TXN-000001",
+      "reason": "not_mine",
+      "note": "I did not authorize this charge while card was in my possession.",
+      "createdAt": "2026-10-25T11:00:00Z"
+    }
+  }
+  ```
+
+### 2.7 Customer Reports (Mine)
+- **Method:** `GET`
+- **URL:** `/api/reports/mine/`
+- **Roles:** customer
+- **Response Shape (200 OK):**
+  ```json
+  {
+    "results": [
+      {
+        "id": 1,
+        "transactionId": "TXN-000001",
+        "reason": "not_mine",
+        "note": "I did not authorize this charge while card was in my possession.",
+        "createdAt": "2026-10-25T11:00:00Z",
+        "case": {
+          "id": 12,
+          "status": "In Review",
+          "outcome": "none"
+        },
+        "dispute": {
+          "id": 4,
+          "stage": "opened",
+          "status": "Submitted"
+        }
+      }
+    ],
+    "count": 1
+  }
+  ```
+
+### 2.8 Demo Spending Patterns
+- **Method:** `GET`
+- **URL:** `/api/patterns/`
+- **Roles:** Authenticated (admin, analyst, customer, merchant)
+- **Response Shape (200 OK):**
+  ```json
+  [
+    {
+      "id": 9,
+      "code": "P09",
+      "label": "Late Night Electronics",
+      "typicalAmount": 10553.40,
+      "typicalTime": "10:26",
+      "trueLabel": 0,
+      "baseScore": 0.0758
+    }
+  ]
+  ```
+  *(Note: `trueLabel` and `baseScore` are returned only for admin and analyst).*
+
+### 2.9 POS Masked Cards
+- **Method:** `GET`
+- **URL:** `/api/pos/cards/`
+- **Roles:** merchant, admin, analyst
+- **Response Shape (200 OK):**
+  ```json
+  [
+    {
+      "id": 1,
+      "brand": "Visa",
+      "last4": "8821",
+      "holderFirstName": "Aarav"
+    }
+  ]
+  ```
+
 ---
 
 ## 3. Alerts (`frontend/src/services/alerts.js`)
@@ -462,6 +622,41 @@ Every viewset in the backend enforces **queryset scoping** via `ScopedQuerySetMi
   - `travelNotice`: Boolean flag.
   - **Blocked Card Transaction Invariant**: Any transaction processed or created on a card with `status == "blocked"` is automatically saved with `status = "blocked"` and high risk band.
 - **Response Shape (200 OK):** Updated Card object.
+
+### 5.3 Issue Card (Admin Only)
+- **Method:** `POST`
+- **URL:** `/api/cards/`
+- **Roles:** admin
+- **Request Body:**
+  ```json
+  {
+    "ownerId": 3,
+    "brand": "Visa",
+    "cardType": "Visa Platinum",
+    "spendingLimit": 150000.0
+  }
+  ```
+- **Rules & Invariants:**
+  - Auto-generates a unique 4-digit `last4` for the cardholder.
+  - Generates full masked card number `•••• •••• •••• {last4}`.
+  - Automatically calculates expiry date (4 years forward).
+  - Emits `AuditLog` entry with action `CARD_ISSUED`.
+- **Response Shape (201 Created):**
+  ```json
+  {
+    "id": 5,
+    "userId": 3,
+    "cardNumber": "•••• •••• •••• 9241",
+    "last4": "9241",
+    "cardType": "Visa Platinum",
+    "brand": "Visa",
+    "holderName": "Aarav Sharma",
+    "expiry": "10/30",
+    "status": "active",
+    "spendingLimit": 150000.0,
+    "travelNotice": false
+  }
+  ```
 
 ---
 
@@ -768,6 +963,11 @@ All stats endpoints support the `range` parameter (`7d`, `30d`, `90d`) and enfor
     "fraudVolumeINR": 1420500.0,
     "totalVolumeINR": 98450000.0,
     "amountSaved": 1420500.0,
+    "moneyProtected": 1420500.0,
+    "confirmedFraud": 56,
+    "falseAlarms": 12,
+    "missedFraud": 2,
+    "avgReviewMinutes": 24.5,
     "avgDetectionMs": 14.5,
     "activeAlerts": 14,
     "openAlerts": 14,
@@ -1128,3 +1328,54 @@ Notifications are automatically dispatched for:
     "modelVersion": "v1.2.0-xgb"
   }
   ```
+
+---
+
+## 15. Merchants (`GET, POST, PATCH /api/merchants/`)
+
+### 15.1 List Merchants
+- **Method:** `GET`
+- **URL:** `/api/merchants/`
+- **Roles:** admin, analyst, merchant
+- **Response Shape (200 OK):**
+  ```json
+  [
+    {
+      "id": 1,
+      "name": "Reliance Digital",
+      "category": "Electronics",
+      "city": "Mumbai",
+      "active": true,
+      "isActive": true,
+      "createdAt": "2026-10-24T18:00:00Z"
+    }
+  ]
+  ```
+
+### 15.2 Create Merchant (Admin Only)
+- **Method:** `POST`
+- **URL:** `/api/merchants/`
+- **Roles:** admin
+- **Request Body:**
+  ```json
+  {
+    "name": "Titan Watch Co",
+    "category": "Fashion",
+    "city": "Bengaluru",
+    "active": true
+  }
+  ```
+- **Response Shape (201 Created):** Created Merchant object. Emits `AuditLog` entry.
+
+### 15.3 Update Merchant (Admin Only)
+- **Method:** `PATCH`
+- **URL:** `/api/merchants/{id}/`
+- **Roles:** admin
+- **Request Body:**
+  ```json
+  {
+    "city": "Hyderabad",
+    "active": true
+  }
+  ```
+- **Response Shape (200 OK):** Updated Merchant object. Emits `AuditLog` entry.

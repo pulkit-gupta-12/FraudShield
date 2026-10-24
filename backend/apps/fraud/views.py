@@ -15,10 +15,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError, PermissionDenied
 
+import random
+from rest_framework import views, viewsets, status
+from rest_framework.throttling import ScopedRateThrottle
 from apps.accounts.models import User
 from apps.accounts.permissions import ScopedQuerySetMixin, IsAdmin, IsAnalyst
 from apps.audit.models import AuditLog
 from apps.fraud.models import (
+    Merchant,
     Card,
     Transaction,
     Alert,
@@ -28,8 +32,11 @@ from apps.fraud.models import (
     Dispute,
     DisputeEvidence,
     Notification,
+    PatternProfile,
+    CustomerReport,
 )
 from apps.fraud.serializers import (
+    MerchantSerializer,
     CardSerializer,
     TransactionSerializer,
     AlertSerializer,
@@ -38,8 +45,47 @@ from apps.fraud.serializers import (
     CaseNoteSerializer,
     DisputeSerializer,
     NotificationSerializer,
+    PatternProfileSerializer,
+    POSCardSerializer,
+    CustomerReportSerializer,
 )
-from apps.ml.ml_service import ml_service, band, status_for
+from apps.ml.ml_service import ml_service, band, status_for, process_transaction
+from apps.ml.feature_builder import build_features
+
+
+def generate_plain_reasons(factors: list, amount_inr: float, risk_band: str) -> list:
+    """Produces at most 3 friendly sentences explaining the decision without showing V-features to users."""
+    if risk_band == 'safe':
+        return ["Transaction matches normal spending activity and verified merchant patterns."]
+
+    reasons = []
+    if factors:
+        for factor in factors:
+            feat = factor.get('feature', '')
+            impact = factor.get('impact', 0.0)
+            if impact <= 0:
+                continue
+            if feat == 'Amount' and "The amount is unusual for this spending pattern." not in reasons:
+                reasons.append("The amount is unusual for this spending pattern.")
+            elif feat == 'Time' and "The time of day is unusual for this account profile." not in reasons:
+                reasons.append("The time of day is unusual for this account profile.")
+            elif feat in ('V1', 'V2', 'V3', 'V4') and "Unusual spending frequency and transaction cadence detected." not in reasons:
+                reasons.append("Unusual spending frequency and transaction cadence detected.")
+            elif feat in ('V10', 'V12', 'V14', 'V17') and "The behaviour is similar to confirmed fraud cases." not in reasons:
+                reasons.append("The behaviour is similar to confirmed fraud cases.")
+            elif feat in ('V8', 'V20', 'V21') and "Atypical checkout location or device fingerprint disparity." not in reasons:
+                reasons.append("Atypical checkout location or device fingerprint disparity.")
+
+            if len(reasons) >= 3:
+                break
+
+    if not reasons:
+        if risk_band in ('high', 'blocked'):
+            reasons.append("High anomalous deviation from baseline cardholder behavior.")
+        else:
+            reasons.append("Transaction behavior warrants additional review.")
+
+    return reasons[:3]
 
 
 ORDERING_MAP = {
@@ -64,6 +110,12 @@ class TransactionViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = TransactionSerializer
     queryset = Transaction.objects.select_related('card', 'card__owner', 'merchant').all()
+
+    def get_throttles(self):
+        if getattr(self, 'action', None) == 'submit':
+            self.throttle_scope = 'submit'
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     def get_object(self):
         queryset = self.filter_queryset(self.get_queryset())
@@ -284,6 +336,353 @@ class TransactionViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
         response = HttpResponse(output.getvalue(), content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="transactions_export.csv"'
         return response
+
+    @action(detail=False, methods=['post'], url_path='submit')
+    def submit(self, request):
+        """
+        POST /api/transactions/submit/
+        Submits and evaluates a real transaction from user inputs.
+        Checks in strict order:
+        (a) Card must be active -> otherwise 'declined' with reason 'card_blocked'
+        (b) Amount must be > 0 and <= spending_limit -> otherwise 'declined' with reason 'limit_exceeded'
+        (c) Build features, score with XGBoost, set status, process alerts/cases/notifications
+        """
+        user = request.user
+        data = request.data
+
+        card_id = data.get('cardId') or data.get('card_id')
+        if not card_id:
+            return Response({'cardId': 'cardId is required.'}, status=400)
+
+        card = Card.objects.filter(id=card_id).select_related('owner').first()
+        if not card:
+            raise Http404("Card not found.")
+
+        # Permission scoping on card
+        if user.role == 'customer' and card.owner_id != user.id:
+            raise PermissionDenied("You can only submit transactions for your own cards.")
+
+        source = 'staff_entry'
+        if user.role == 'customer':
+            source = 'customer_entry'
+        elif user.role == 'merchant':
+            source = 'merchant_terminal'
+
+        # Merchant lookup & scoping
+        merchant_id = data.get('merchantId') or data.get('merchant_id')
+        merchant_name = data.get('merchantName') or data.get('merchant_name') or ''
+        merchant_category = data.get('merchantCategory') or data.get('category') or 'General'
+        merchant = None
+
+        if merchant_id:
+            merchant = Merchant.objects.filter(id=merchant_id).first()
+            if merchant:
+                merchant_name = merchant.name
+                merchant_category = merchant.category
+        elif user.role == 'merchant' and getattr(user, 'merchant', None):
+            merchant = user.merchant
+            merchant_name = merchant.name
+            merchant_category = merchant.category
+        elif merchant_name:
+            merchant = Merchant.objects.filter(name__iexact=merchant_name).first()
+            if not merchant:
+                merchant = Merchant.objects.create(
+                    name=merchant_name, category=merchant_category, city=data.get('city', 'Mumbai')
+                )
+
+        if user.role == 'merchant':
+            user_m = getattr(user, 'merchant', None)
+            if user_m and merchant and merchant.id != user_m.id:
+                raise PermissionDenied("Merchants may only process transactions at their own terminal.")
+
+        city = data.get('city', 'Mumbai')
+        try:
+            amount = float(data.get('amount', 0))
+        except (ValueError, TypeError):
+            return Response({'amount': 'Amount must be a valid number.'}, status=400)
+
+        occurred_at = data.get('occurredAt') or data.get('occurred_at') or data.get('timestamp')
+        if occurred_at:
+            try:
+                occurred_at_dt = timezone.datetime.fromisoformat(str(occurred_at).replace('Z', '+00:00'))
+            except Exception:
+                occurred_at_dt = timezone.now()
+        else:
+            occurred_at_dt = timezone.now()
+
+        cfg = ml_service.get_config()
+        t_val = cfg['threshold']
+        rf_val = cfg['review_floor']
+
+        # CHECK (a): The card must be active, otherwise decision 'declined' with reason 'card_blocked'
+        if card.status != 'active':
+            public_id = f"TXN-{random.randint(100000, 999999)}"
+            txn = Transaction.objects.create(
+                public_id=public_id,
+                card=card,
+                merchant=merchant,
+                merchant_name=merchant_name,
+                merchant_category=merchant_category,
+                amount=round(amount / 90.0, 2),
+                amount_inr=round(amount, 2),
+                city=city,
+                timestamp=occurred_at_dt,
+                status='declined',
+                risk_score=None,
+                source=source,
+            )
+            AuditLog.objects.create(
+                actor=user.email,
+                role=user.role,
+                action='TRANSACTION_DECLINED',
+                target=public_id,
+                status='SUCCESS',
+                details=f"Transaction declined: card {card.last4} is blocked.",
+                ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+            )
+            return Response({
+                'transaction': txn.to_display_dict(t_val, rf_val),
+                'decision': 'declined',
+                'reason': 'card_blocked',
+                'reasons': ['Transaction declined: card is currently blocked.'],
+                'riskScore': None,
+                'band': 'declined',
+                'threshold': t_val,
+                'reviewFloor': rf_val,
+                'factors': None,
+                'alertId': None,
+                'caseId': None,
+            }, status=200)
+
+        # CHECK (b): Amount must be above 0 and not above the card's spending_limit, otherwise 'declined' with reason 'limit_exceeded'
+        if amount <= 0 or amount > float(card.spending_limit):
+            public_id = f"TXN-{random.randint(100000, 999999)}"
+            txn = Transaction.objects.create(
+                public_id=public_id,
+                card=card,
+                merchant=merchant,
+                merchant_name=merchant_name,
+                merchant_category=merchant_category,
+                amount=round(amount / 90.0, 2),
+                amount_inr=round(amount, 2),
+                city=city,
+                timestamp=occurred_at_dt,
+                status='declined',
+                risk_score=None,
+                source=source,
+            )
+            reason_msg = f"Amount exceeds card spending limit of Rs. {float(card.spending_limit):,.2f}." if amount > float(card.spending_limit) else "Amount must be greater than zero."
+            AuditLog.objects.create(
+                actor=user.email,
+                role=user.role,
+                action='TRANSACTION_DECLINED',
+                target=public_id,
+                status='SUCCESS',
+                details=f"Transaction declined: {reason_msg}",
+                ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+            )
+            return Response({
+                'transaction': txn.to_display_dict(t_val, rf_val),
+                'decision': 'declined',
+                'reason': 'limit_exceeded',
+                'reasons': [reason_msg],
+                'riskScore': None,
+                'band': 'declined',
+                'threshold': t_val,
+                'reviewFloor': rf_val,
+                'factors': None,
+                'alertId': None,
+                'caseId': None,
+            }, status=200)
+
+        # CHECK (c): Build features, score with real model, apply bands, set status, process_transaction
+        pattern_id = data.get('patternId') or data.get('pattern_id') or data.get('pattern')
+        raw_values = data.get('rawValues') or data.get('raw_values')
+        if user.role not in ('admin', 'analyst'):
+            raw_values = None
+
+        features = build_features(
+            amount_inr=amount,
+            local_datetime=occurred_at_dt,
+            pattern=pattern_id,
+            raw_values=raw_values,
+        )
+
+        public_id = f"TXN-{random.randint(100000, 999999)}"
+        txn = Transaction(
+            public_id=public_id,
+            card=card,
+            merchant=merchant,
+            merchant_name=merchant_name,
+            merchant_category=merchant_category,
+            amount=round(amount / 90.0, 2),
+            amount_inr=round(amount, 2),
+            city=city,
+            timestamp=occurred_at_dt,
+            model_inputs=features,
+            source=source,
+        )
+        process_transaction(txn, save=True, threshold=t_val, review_floor=rf_val)
+
+        if txn.status == 'blocked':
+            decision = 'blocked'
+        elif txn.status == 'flagged':
+            decision = 'review'
+        else:
+            decision = 'approved'
+
+        plain_reasons = generate_plain_reasons(txn.factors, amount, txn.band(t_val, rf_val))
+        alert = txn.alerts.first()
+        case = txn.cases.first()
+
+        AuditLog.objects.create(
+            actor=user.email,
+            role=user.role,
+            action='TRANSACTION_SUBMITTED',
+            target=public_id,
+            status='SUCCESS',
+            details=f"Transaction submitted: Rs. {amount} at {merchant_name} -> {decision} (score: {txn.risk_score})",
+            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+        )
+
+        return Response({
+            'transaction': txn.to_display_dict(t_val, rf_val),
+            'decision': decision,
+            'reason': decision,
+            'reasons': plain_reasons,
+            'riskScore': txn.risk_score,
+            'band': txn.band(t_val, rf_val),
+            'threshold': t_val,
+            'reviewFloor': rf_val,
+            'factors': txn.factors if user.role in ('admin', 'analyst') else None,
+            'alertId': alert.id if alert else None,
+            'caseId': case.id if case else None,
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='report')
+    def report(self, request, pk=None):
+        """
+        POST /api/transactions/{id}/report/
+        Allows cardholder to file a customer complaint on a transaction.
+        Enforces: card owner only, once per transaction, max 500 characters note.
+        Creates CustomerReport, Case with source 'customer_report', Alert, and Dispute.
+        """
+        txn = self.get_object()
+        user = request.user
+
+        if txn.card and txn.card.owner_id != user.id and user.role != 'admin' and not user.is_superuser:
+            raise PermissionDenied("Only the cardholder can report this transaction.")
+
+        if hasattr(txn, 'customer_report') or CustomerReport.objects.filter(transaction=txn).exists():
+            return Response({'detail': 'A report has already been submitted for this transaction.'}, status=400)
+
+        reason = request.data.get('reason')
+        valid_reasons = ('not_mine', 'duplicate', 'not_received', 'wrong_amount', 'other')
+        if reason not in valid_reasons:
+            return Response({'reason': f"Invalid reason '{reason}'. Must be one of: {', '.join(valid_reasons)}."}, status=400)
+
+        note = str(request.data.get('note', '')).strip()
+        if not note:
+            return Response({'note': 'Note is required.'}, status=400)
+        if len(note) > 500:
+            return Response({'note': 'Note cannot exceed 500 characters.'}, status=400)
+
+        with db_transaction.atomic():
+            report = CustomerReport.objects.create(
+                transaction=txn,
+                customer=user,
+                reason=reason,
+                note=note,
+            )
+
+            alert, _ = Alert.objects.get_or_create(
+                transaction=txn,
+                defaults={
+                    'severity': 'high',
+                    'status': 'escalated',
+                    'customer_response': 'not_me' if reason == 'not_mine' else 'none',
+                }
+            )
+
+            case, created_case = Case.objects.get_or_create(
+                transaction=txn,
+                defaults={
+                    'alert': alert,
+                    'status': 'Escalated',
+                    'priority': 'P1',
+                    'outcome': 'none',
+                    'source': 'customer_report',
+                }
+            )
+            if not created_case:
+                case.status = 'Escalated'
+                case.priority = 'P1'
+                case.source = 'customer_report'
+                case.save()
+
+            CaseEvent.objects.create(
+                case=case,
+                event_type='customer_report',
+                action='Customer Complaint Filed',
+                text=f"Cardholder filed report ({reason}): {note}",
+                actor=user.name or user.email,
+            )
+
+            dispute = Dispute.objects.create(
+                merchant=txn.merchant,
+                transaction=txn,
+                customer=user,
+                customer_name=user.name or user.email,
+                amount_inr=txn.amount_inr,
+                reason=reason,
+                stage='opened',
+                status='Submitted',
+                evidence_notes=note,
+            )
+
+            report.case = case
+            report.dispute = dispute
+            report.save()
+
+            # Notifications
+            for analyst in User.objects.filter(role__in=['analyst', 'admin'], is_active=True):
+                Notification.objects.create(
+                    user=analyst,
+                    type='case',
+                    title=f"Customer Complaint: {txn.public_id}",
+                    body=f"Cardholder reported transaction {txn.public_id} ({reason}). Case escalated.",
+                    link=f"/cases/{case.id}",
+                )
+
+            if txn.merchant:
+                for m_user in User.objects.filter(merchant=txn.merchant, is_active=True):
+                    Notification.objects.create(
+                        user=m_user,
+                        type='dispute',
+                        title=f"New Dispute: {txn.public_id}",
+                        body=f"A dispute has been opened for transaction {txn.public_id} ({reason}).",
+                        link="/merchant/chargebacks",
+                    )
+
+            AuditLog.objects.create(
+                actor=user.email,
+                role=user.role,
+                action='TRANSACTION_REPORTED',
+                target=txn.public_id,
+                status='SUCCESS',
+                details=f"Customer reported transaction {txn.public_id} ({reason}): {note}",
+                ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+            )
+
+        return Response({
+            'success': True,
+            'message': 'Transaction reported successfully.',
+            'reportId': report.id,
+            'caseId': case.id,
+            'disputeId': dispute.id,
+            'alertId': alert.id if alert else None,
+            'report': CustomerReportSerializer(report).data,
+        }, status=status.HTTP_201_CREATED)
 
 
 class AlertViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
@@ -736,6 +1135,66 @@ class CardViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
             queryset = queryset.order_by(ordering)
         return queryset
 
+    def create(self, request, *args, **kwargs):
+        """
+        Issue card: POST /api/cards/ (admin) with { ownerId, brand, spendingLimit };
+        last4 is generated and unique per owner. Audit both.
+        """
+        if request.user.role != 'admin' and not request.user.is_superuser:
+            raise PermissionDenied("Only administrators can issue cards.")
+
+        data = request.data
+        owner_id = data.get('ownerId') or data.get('owner_id') or data.get('userId') or data.get('user_id')
+        if not owner_id:
+            raise ValidationError({'ownerId': 'ownerId is required.'})
+
+        try:
+            owner = User.objects.get(id=owner_id)
+        except User.DoesNotExist:
+            raise ValidationError({'ownerId': f"User with id {owner_id} does not exist."})
+
+        brand = data.get('brand', 'Visa')
+        card_type = data.get('cardType') or data.get('card_type') or f"{brand} Platinum"
+        spending_limit = data.get('spendingLimit') or data.get('spending_limit', 100000.0)
+
+        # Generate unique last4 per owner
+        existing_last4s = set(Card.objects.filter(owner=owner).values_list('last4', flat=True))
+        for _ in range(100):
+            last4 = f"{random.randint(1000, 9999)}"
+            if last4 not in existing_last4s:
+                break
+        else:
+            last4 = f"{random.randint(1000, 9999)}"
+
+        card_number = f"•••• •••• •••• {last4}"
+        now = timezone.now()
+        exp_year = (now.year + 4) % 100
+        expiry = f"{now.month:02d}/{exp_year:02d}"
+
+        card = Card.objects.create(
+            owner=owner,
+            card_number=card_number,
+            last4=last4,
+            brand=brand,
+            card_type=card_type,
+            spending_limit=float(spending_limit),
+            expiry=expiry,
+            status='active',
+            travel_notice=False,
+        )
+
+        AuditLog.objects.create(
+            actor=request.user.email,
+            role=request.user.role,
+            action='CARD_ISSUED',
+            target=f"Card:{card.id} (•••• {card.last4})",
+            status='SUCCESS',
+            details=f"Admin issued new {brand} card ending in {last4} for user {owner.email} with limit {spending_limit}.",
+            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+        )
+
+        return Response(CardSerializer(card, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
     def partial_update(self, request, *args, **kwargs):
         card = self.get_object()
         if request.user.role != 'admin' and not request.user.is_superuser and card.owner != request.user:
@@ -1090,6 +1549,12 @@ class NotificationViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
         return Notification.objects.filter(user=user).order_by('-created_at')
 
     def filter_queryset(self, queryset):
+        since_param = self.request.query_params.get('since')
+        if since_param:
+            from django.utils.dateparse import parse_datetime
+            dt = parse_datetime(since_param.replace(' ', '+'))
+            if dt:
+                queryset = queryset.filter(created_at__gt=dt)
         return queryset.order_by('-created_at')
 
     def list(self, request, *args, **kwargs):
@@ -1133,4 +1598,86 @@ class NotificationViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='read-all')
     def read_all(self, request):
         return self.mark_all_read(request)
+
+
+class MerchantViewSet(viewsets.ModelViewSet):
+    """
+    GET, POST, PATCH /api/merchants/ (admin; name, category, city, active).
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = MerchantSerializer
+    queryset = Merchant.objects.all().order_by('name')
+
+    def check_admin_perm(self, request):
+        if request.user.role != 'admin' and not request.user.is_superuser:
+            raise PermissionDenied("Only administrators can modify merchants.")
+
+    def create(self, request, *args, **kwargs):
+        self.check_admin_perm(request)
+        resp = super().create(request, *args, **kwargs)
+        AuditLog.objects.create(
+            actor=request.user.email,
+            role=request.user.role,
+            action='MERCHANT_CREATED',
+            target=f"Merchant:{resp.data.get('id')}",
+            status='SUCCESS',
+            details=f"Admin created merchant {resp.data.get('name')}",
+            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+        )
+        return resp
+
+    def partial_update(self, request, *args, **kwargs):
+        self.check_admin_perm(request)
+        resp = super().partial_update(request, *args, **kwargs)
+        AuditLog.objects.create(
+            actor=request.user.email,
+            role=request.user.role,
+            action='MERCHANT_UPDATED',
+            target=f"Merchant:{kwargs.get('pk')}",
+            status='SUCCESS',
+            details=f"Admin updated merchant {kwargs.get('pk')}",
+            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+        )
+        return resp
+
+
+class PatternProfileViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    GET /api/patterns/
+    Returns list of 20 spending patterns.
+    (id, code, label, typicalAmount, typicalTime; trueLabel and baseScore only for admin and analyst).
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = PatternProfileSerializer
+    queryset = PatternProfile.objects.all().order_by('code')
+    pagination_class = None
+
+
+class POSCardsListView(views.APIView):
+    """
+    GET /api/pos/cards/
+    Returns active cards, masked: brand, last 4, holder first name, nothing else.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        cards = Card.objects.filter(status='active').select_related('owner').order_by('id')
+        serializer = POSCardSerializer(cards, many=True)
+        return Response(serializer.data)
+
+
+class CustomerReportsListView(views.APIView):
+    """
+    GET /api/reports/mine/
+    Lists the customer's reports with the live status of their case and dispute.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        reports = CustomerReport.objects.filter(customer=request.user).select_related('transaction', 'case', 'dispute').order_by('-created_at')
+        serializer = CustomerReportSerializer(reports, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': reports.count(),
+        })
 

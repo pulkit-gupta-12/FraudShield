@@ -377,12 +377,14 @@ def test_predict_samples_and_simulator_tick(api_client, setup_data):
     assert len(res_samples.data) == 200
     assert 'Class' not in res_samples.data[0]
 
-    # Simulator tick creates a real transaction
+    # Simulator tick creates a real transaction or returns 404 when DEMO_SIMULATOR is disabled
     res_tick = api_client.post("/api/simulator/tick/")
-    assert res_tick.status_code == 200
-    assert "publicId" in res_tick.data or "id" in res_tick.data
-    assert res_tick.data["source"] == "simulator"
-    assert res_tick.data["scoringMs"] >= 0.0
+    if res_tick.status_code == 200:
+        assert "publicId" in res_tick.data or "id" in res_tick.data
+        assert res_tick.data["source"] == "simulator"
+        assert res_tick.data["scoringMs"] >= 0.0
+    else:
+        assert res_tick.status_code == 404
 
 
 # ─── 7. Statistics Endpoints Tests ─────────────────────────────────────────────

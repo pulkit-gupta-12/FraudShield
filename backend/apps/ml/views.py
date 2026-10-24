@@ -1,3 +1,4 @@
+import os
 import io
 import json
 import time
@@ -242,9 +243,14 @@ def predict_batch(request):
 def simulator_tick(request):
     """
     POST /api/simulator/tick/
-    Creates ONE real new transaction through process_transaction (skipping blocked cards),
-    so alerts, cases and notifications appear for real.
+    Disabled by default in demo mode unless DEMO_SIMULATOR=true in environment.
     """
+    if not (os.getenv('DEMO_SIMULATOR', 'false').lower() in ('true', '1')):
+        return Response(
+            {'message': 'Simulator is disabled in demo mode. Set DEMO_SIMULATOR=true in .env to enable.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
     txn = create_simulated_transaction()
     return Response(TransactionSerializer(txn, context={'request': request}).data)
 

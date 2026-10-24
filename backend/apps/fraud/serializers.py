@@ -11,14 +11,71 @@ from apps.fraud.models import (
     DisputeEvidence,
     Notification,
     ModelConfig,
+    PatternProfile,
+    CustomerReport,
 )
 from apps.ml.ml_service import ml_service
 
 
 class MerchantSerializer(serializers.ModelSerializer):
+    isActive = serializers.BooleanField(source='active', required=False)
+
     class Meta:
         model = Merchant
-        fields = ['id', 'name', 'category', 'city', 'created_at']
+        fields = ['id', 'name', 'category', 'city', 'active', 'isActive', 'created_at']
+
+
+class PatternProfileSerializer(serializers.ModelSerializer):
+    typicalAmount = serializers.FloatField(source='typical_amount', read_only=True)
+    typicalTime = serializers.CharField(source='typical_time', read_only=True)
+
+    class Meta:
+        model = PatternProfile
+        fields = ['id', 'code', 'label', 'typicalAmount', 'typicalTime']
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated and request.user.role in ('admin', 'analyst'):
+            ret['trueLabel'] = instance.true_label
+            ret['baseScore'] = instance.base_score
+        return ret
+
+
+class POSCardSerializer(serializers.ModelSerializer):
+    holderFirstName = serializers.SerializerMethodField()
+    last4 = serializers.CharField(read_only=True)
+    brand = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Card
+        fields = ['id', 'brand', 'last4', 'holderFirstName']
+
+    def get_holderFirstName(self, obj):
+        if obj.owner and obj.owner.name:
+            return obj.owner.name.split()[0]
+        return 'Cardholder'
+
+
+class CustomerReportSerializer(serializers.ModelSerializer):
+    transactionId = serializers.CharField(source='transaction.public_id', read_only=True)
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    case = serializers.SerializerMethodField()
+    dispute = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomerReport
+        fields = ['id', 'transactionId', 'reason', 'note', 'createdAt', 'case', 'dispute']
+
+    def get_case(self, obj):
+        if obj.case:
+            return {'id': obj.case.id, 'status': obj.case.status, 'outcome': obj.case.outcome}
+        return None
+
+    def get_dispute(self, obj):
+        if obj.dispute:
+            return {'id': obj.dispute.id, 'stage': obj.dispute.stage, 'status': obj.dispute.status}
+        return None
 
 
 class CardSerializer(serializers.ModelSerializer):

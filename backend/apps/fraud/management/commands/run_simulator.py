@@ -16,6 +16,11 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        import os
+        if not (os.getenv('DEMO_SIMULATOR', 'false').lower() in ('true', '1')):
+            self.stderr.write(self.style.ERROR("Simulator is disabled in demo mode. Set DEMO_SIMULATOR=true in .env to run."))
+            sys.exit(1)
+
         interval = options['interval']
         self.stdout.write(self.style.SUCCESS(f"Starting transaction simulator with {interval}s interval... (Ctrl+C to stop)"))
 

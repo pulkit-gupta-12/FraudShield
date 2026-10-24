@@ -162,6 +162,7 @@ REST_FRAMEWORK = {
         'login': '5/min',
         'register': '5/min',
         'forgot_password': '3/min',
+        'submit': '30/min',
     },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }

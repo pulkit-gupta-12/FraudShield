@@ -104,6 +104,18 @@ class Command(BaseCommand):
             action='store_true',
             help='Wipe existing database records before seeding'
         )
+        parser.add_argument(
+            '--minimal',
+            action='store_true',
+            default=False,
+            help='Seed minimal demo accounts, merchants, cards, patterns, and NO transactions (default)'
+        )
+        parser.add_argument(
+            '--history',
+            action='store_true',
+            default=False,
+            help='Additionally seed 30 days of scored transaction history and investigations'
+        )
 
     def handle(self, *args, **options):
         start_time = time.time()
@@ -136,6 +148,9 @@ class Command(BaseCommand):
             Alert.objects.all().delete()
             Transaction.objects.all().delete()
             Card.objects.all().delete()
+
+        is_history = options.get('history', False)
+        is_minimal = not is_history
 
         # 1. Load ModelConfig & ML files
         ml_dir = Path(getattr(settings, 'ML_DIR', Path(__file__).resolve().parent.parent.parent.parent / 'ml'))
@@ -177,21 +192,24 @@ class Command(BaseCommand):
         )
         self.stdout.write(f"Created ModelConfig ({model_config.version}) with threshold {model_config.threshold} and review floor {model_config.review_floor}.")
 
-        df = pd.read_csv(csv_path)
-        self.stdout.write(f"Loaded test sample CSV: {len(df)} rows.")
+        # Build 20 spending patterns
+        from django.core.management import call_command
+        self.stdout.write("Building 20 demo spending patterns...")
+        call_command('build_patterns')
 
-        # 2. Seed 30 Merchants
+        # 2. Seed Merchants (10 for minimal, 30 for history)
+        merchant_pool = MERCHANT_SEEDS[:10] if is_minimal else MERCHANT_SEEDS
         merchants = []
-        for m_data in MERCHANT_SEEDS:
+        for m_data in merchant_pool:
             m, _ = Merchant.objects.get_or_create(
                 name=m_data['name'],
-                defaults={'category': m_data['category'], 'city': m_data['city']}
+                defaults={'category': m_data['category'], 'city': m_data['city'], 'active': True}
             )
             merchants.append(m)
         self.stdout.write(f"Seeded {len(merchants)} merchants.")
 
         # 3. Seed Demo Users (4 demo users)
-        demo_merchant = merchants[0]  # Reliance Digital
+        demo_merchant = merchants[0]  # Reliance Fresh / Reliance Digital
         demo_definitions = [
             ("admin@fraudshield.com", "admin@fraudshield.io", "Admin User", "admin", "Admin@123", "Security & Administration", "FraudShield Global", True, True, None),
             ("analyst@fraudshield.com", "analyst@fraudshield.io", "Lead Analyst", "analyst", "Analyst@123", "Fraud Investigation Unit", "FraudShield Global", False, False, None),
@@ -228,9 +246,13 @@ class Command(BaseCommand):
         demo_customer_alt = demo_users_map["customer@fraudshield.com"]
         demo_analyst = demo_users_map["analyst@fraudshield.io"]
 
-        # 4. Seed 36 Additional Users: 28 customers, 4 analysts, 3 merchant users, 1 extra admin
+        # 4. Seed Additional Users (12 for minimal: 8 cust, 2 analyst, 1 merchant, 1 admin; 36 for history)
+        cust_names = CUSTOMER_NAMES[:8] if is_minimal else CUSTOMER_NAMES
+        analyst_names = ANALYST_NAMES[:2] if is_minimal else ANALYST_NAMES
+        merch_user_names = MERCHANT_USER_NAMES[:1] if is_minimal else MERCHANT_USER_NAMES
+
         customers = [demo_customer, demo_customer_alt]
-        for i, c_name in enumerate(CUSTOMER_NAMES):
+        for i, c_name in enumerate(cust_names):
             email = f"customer.{c_name.lower().replace(' ', '.')}.{i+1}@fraudshield.io"
             u, _ = User.objects.get_or_create(
                 email=email,
@@ -248,7 +270,7 @@ class Command(BaseCommand):
             customers.append(u)
 
         analysts = [demo_analyst]
-        for i, a_name in enumerate(ANALYST_NAMES):
+        for i, a_name in enumerate(analyst_names):
             email = f"analyst.{a_name.lower().replace(' ', '.')}.{i+1}@fraudshield.io"
             u, _ = User.objects.get_or_create(
                 email=email,
@@ -265,7 +287,7 @@ class Command(BaseCommand):
             u.save()
             analysts.append(u)
 
-        for i, m_name in enumerate(MERCHANT_USER_NAMES):
+        for i, m_name in enumerate(merch_user_names):
             email = f"merchant.{m_name.lower().replace(' ', '.')}.{i+1}@fraudshield.io"
             linked_m = merchants[(i + 1) % len(merchants)]
             u, _ = User.objects.get_or_create(
@@ -300,15 +322,17 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Seeded users: {User.objects.count()} total users across all roles.")
 
-        # 5. Seed 60 Cards (Demo customer owns 3, remaining 57 across other customers)
+        # 5. Seed Cards (12 for minimal, 60 for history)
         cards = []
         card_types = ["Visa Platinum", "Mastercard World", "RuPay Select", "Visa Signature", "Mastercard Black"]
 
         demo_customer_cards = [
             ("4532 •••• •••• 8821", "8821", "Visa", "Visa Platinum", 150000.00, "08/28"),
             ("5241 •••• •••• 4129", "4129", "Mastercard", "Mastercard World", 250000.00, "11/27"),
-            ("6071 •••• •••• 9034", "9034", "RuPay", "RuPay Select", 100000.00, "03/29"),
         ]
+        if not is_minimal:
+            demo_customer_cards.append(("6071 •••• •••• 9034", "9034", "RuPay", "RuPay Select", 100000.00, "03/29"))
+
         for cnum, last4, brand, ctype, limit, exp in demo_customer_cards:
             c, _ = Card.objects.get_or_create(
                 owner=demo_customer,
@@ -327,8 +351,10 @@ class Command(BaseCommand):
 
         rng = random.Random(42)
         other_customers = [c for c in customers if c.id != demo_customer.id]
-        for i in range(4, 61):
-            owner = other_customers[(i - 4) % len(other_customers)]
+        target_card_count = 12 if is_minimal else 60
+
+        for i in range(len(cards), target_card_count):
+            owner = other_customers[(i - len(demo_customer_cards)) % len(other_customers)]
             last4 = str(rng.randint(1000, 9999))
             brand = rng.choice(["Visa", "Mastercard", "RuPay"])
             c_type = rng.choice(card_types)
@@ -339,7 +365,7 @@ class Command(BaseCommand):
                     'card_number': f"•••• •••• •••• {last4}",
                     'brand': brand,
                     'card_type': c_type,
-                    'status': 'blocked' if rng.random() < 0.05 else 'active',
+                    'status': 'blocked' if (not is_minimal and rng.random() < 0.05) else 'active',
                     'spending_limit': rng.choice([50000, 100000, 200000, 500000]),
                     'expiry': f"{rng.randint(1, 12):02d}/{rng.randint(27, 31)}",
                     'travel_notice': rng.random() < 0.1,
@@ -347,9 +373,33 @@ class Command(BaseCommand):
             )
             cards.append(c)
 
-        self.stdout.write(f"Seeded {len(cards)} cards (demo customer owns 3).")
+        self.stdout.write(f"Seeded {len(cards)} cards.")
 
-        # 6. Single Batch Scoring of all CSV rows
+        if is_minimal:
+            # Ensure transactions, alerts, cases, disputes, notifications are completely empty
+            DisputeEvidence.objects.all().delete()
+            Dispute.objects.all().delete()
+            CaseNote.objects.all().delete()
+            CaseEvent.objects.all().delete()
+            Case.objects.all().delete()
+            Alert.objects.all().delete()
+            Transaction.objects.all().delete()
+            Notification.objects.all().delete()
+
+            self.stdout.write(self.style.SUCCESS(
+                f"\n=== Minimal Demo Seed Completed in {time.time() - start_time:.2f}s ===\n"
+                f"  - Users: {User.objects.count()} (4 demo + 12 extra)\n"
+                f"  - Merchants: {Merchant.objects.count()} (10)\n"
+                f"  - Cards: {Card.objects.count()} (12 active)\n"
+                f"  - ModelConfig: threshold={model_config.threshold}, review_floor={model_config.review_floor}\n"
+                f"  - Spending Patterns: 20 demo profiles (P01..P20)\n"
+                f"  - Transactions: 0 (Pure Real-User Input Mode)\n"
+            ))
+            return
+
+        # 6. Single Batch Scoring of all CSV rows (History Mode)
+        df = pd.read_csv(csv_path)
+        self.stdout.write(f"Loaded test sample CSV: {len(df)} rows.")
         self.stdout.write("Scoring transactions in ONE vectorised batch...")
         scores = score(df)
         explanations = explain(df)

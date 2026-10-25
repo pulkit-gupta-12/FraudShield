@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Search,
   Filter,
@@ -40,9 +40,11 @@ export function InvestigatePage() {
 
   // S14 Inspector Modal State
   const [selectedCaseId, setSelectedCaseId] = useState(null)
+  const [newlyAddedIds, setNewlyAddedIds] = useState(new Set())
+  const prevCaseIdsRef = useRef(new Set())
 
-  const fetchCases = useCallback(async () => {
-    setLoading(true)
+  const fetchCases = useCallback(async (isPoll = false) => {
+    if (!isPoll) setLoading(true)
     setError(null)
     try {
       const res = await getCases({
@@ -53,17 +55,42 @@ export function InvestigatePage() {
         status: statusFilter,
         priority: priorityFilter,
       })
-      setCases(res.results || [])
+      const items = res.results || []
+      setCases(items)
       setTotalCount(res.count || 0)
+
+      if (prevCaseIdsRef.current.size > 0) {
+        const fresh = items.filter((c) => !prevCaseIdsRef.current.has(c.id)).map((c) => c.id)
+        if (fresh.length > 0) {
+          setNewlyAddedIds((prev) => new Set([...prev, ...fresh]))
+          setTimeout(() => {
+            setNewlyAddedIds((prev) => {
+              const next = new Set(prev)
+              fresh.forEach((id) => next.delete(id))
+              return next
+            })
+          }, 4000)
+        }
+      }
+      prevCaseIdsRef.current = new Set(items.map((c) => c.id))
     } catch (err) {
-      setError(err.message || 'Failed to fetch investigation cases')
+      if (!isPoll) setError(err.message || 'Failed to fetch investigation cases')
     } finally {
-      setLoading(false)
+      if (!isPoll) setLoading(false)
     }
   }, [page, pageSize, search, ordering, statusFilter, priorityFilter])
 
   useEffect(() => {
-    fetchCases()
+    fetchCases(false)
+    const interval = setInterval(() => fetchCases(true), 10000)
+    const onFocus = () => fetchCases(true)
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onFocus)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onFocus)
+    }
   }, [fetchCases])
 
   const columns = [
@@ -247,6 +274,11 @@ export function InvestigatePage() {
             }}
             searchPlaceholder="Search case ID, customer, or transaction ref..."
             onRowClick={(row) => setSelectedCaseId(row.id)}
+            rowClassName={(row) =>
+              newlyAddedIds.has(row.id)
+                ? 'bg-amber-50/80 ring-1 ring-inset ring-amber-300 font-medium transition-all duration-700'
+                : 'hover:bg-primary-50/40 cursor-pointer'
+            }
             emptyMessage="No investigation cases matching criteria."
           />
         )}

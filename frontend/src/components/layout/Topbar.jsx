@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   Menu,
@@ -11,49 +11,113 @@ import {
   CheckCheck,
   Shield,
   Layers,
-  FlaskConical,
+  ArrowRight,
+  Loader2,
+  Receipt,
+  CreditCard,
+  Building2,
 } from 'lucide-react'
-import { useAuth, getRoleDashboardPath } from '../../context/AuthContext.jsx'
-import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../../services/notifications.js'
+import { useAuth } from '../../context/AuthContext.jsx'
+import {
+  getNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from '../../services/notifications.js'
+import { getTransactions } from '../../services/transactions.js'
 import { formatRelativeTime } from '../../utils/format.js'
 import toast from 'react-hot-toast'
 
-// Show a "Demo data" chip in the top bar when running in mock mode
-const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
-
 export function Topbar({ onMenuClick }) {
   const { user, logout } = useAuth()
-  const location  = useLocation()
-  const navigate  = useNavigate()
+  const location = useLocation()
+  const navigate = useNavigate()
 
-  const [notifications, setNotifications]       = useState([])
-  const [notifCount, setNotifCount]             = useState(0)
+  // Notifications
+  const [notifications, setNotifications] = useState([])
   const [showNotifications, setShowNotifications] = useState(false)
-  const [showUserMenu, setShowUserMenu]         = useState(false)
-  const [searchQuery, setSearchQuery]           = useState('')
-
   const notifRef = useRef(null)
-  const userRef  = useRef(null)
+  const userRef = useRef(null)
+  const lastKnownNotifIds = useRef(new Set())
+  const isInitialNotifLoad = useRef(true)
+
+  // Top-bar search state
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false)
+  const searchContainerRef = useRef(null)
+
+  // ── 1. Fetch & Poll Notifications every 10s ──
+  const fetchNotifications = useCallback(async (isPolling = false) => {
+    try {
+      const data = await getNotifications({ pageSize: 50 })
+      const list = Array.isArray(data) ? data : data.results || []
+
+      if (isPolling && !isInitialNotifLoad.current) {
+        // Detect brand-new notifications
+        list.forEach((item) => {
+          if (!lastKnownNotifIds.current.has(item.id) && !item.read) {
+            toast(`Alert: ${item.title || item.message}`, {
+              icon: '🔔',
+              duration: 4000,
+            })
+          }
+        })
+      }
+
+      const idSet = new Set(list.map((n) => n.id))
+      lastKnownNotifIds.current = idSet
+      isInitialNotifLoad.current = false
+      setNotifications(list)
+    } catch {
+      // Non-critical background failure
+    }
+  }, [])
 
   useEffect(() => {
-    let isMounted = true
-    getNotifications({ pageSize: 50 })
-      .then((data) => {
-        if (!isMounted) return
-        // Handle both shapes: array (legacy) and { results, count } (new)
-        if (Array.isArray(data)) {
-          setNotifications(data)
-          setNotifCount(data.length)
-        } else {
-          setNotifications(data.results ?? [])
-          setNotifCount(data.count ?? 0)
-        }
-      })
-      .catch(() => {
-        // Silently fail – notifications are non-critical
-      })
-    return () => { isMounted = false }
-  }, [])
+    fetchNotifications(false)
+    const interval = setInterval(() => {
+      fetchNotifications(true)
+    }, 10000)
+
+    const handleFocus = () => fetchNotifications(true)
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') handleFocus()
+    })
+
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [fetchNotifications])
+
+  // ── 2. Real Role-Scoped Top-Bar Search ──
+  useEffect(() => {
+    if (!searchQuery.trim() || searchQuery.trim().length < 2) {
+      setSearchResults([])
+      setShowSearchDropdown(false)
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      setSearchLoading(true)
+      try {
+        const res = await getTransactions({
+          search: searchQuery.trim(),
+          pageSize: 6,
+        })
+        setSearchResults(res.results || [])
+        setShowSearchDropdown(true)
+      } catch (err) {
+        console.warn('Search lookup failed:', err)
+      } finally {
+        setSearchLoading(false)
+      }
+    }, 250)
+
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -63,6 +127,9 @@ export function Topbar({ onMenuClick }) {
       }
       if (userRef.current && !userRef.current.contains(e.target)) {
         setShowUserMenu(false)
+      }
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) {
+        setShowSearchDropdown(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -86,16 +153,37 @@ export function Topbar({ onMenuClick }) {
     if (item.link) navigate(item.link)
   }
 
+  const handleSearchResultClick = (item) => {
+    setShowSearchDropdown(false)
+    setSearchQuery('')
+
+    const role = user?.role
+    const id = item.id || item.publicId
+
+    if (role === 'customer') {
+      navigate(`/customer/transactions?search=${id}`)
+    } else if (role === 'merchant') {
+      navigate(`/merchant/chargebacks?search=${id}`)
+    } else {
+      // Staff (admin / analyst)
+      if (item.caseId) {
+        navigate(`/analyst/investigate/${item.caseId}`)
+      } else {
+        navigate(`/analyst/investigate?search=${id}`)
+      }
+    }
+  }
+
   const handleLogout = async () => {
     await logout()
     navigate('/login')
   }
 
-  // Generate breadcrumb items from URL
+  // Generate breadcrumbs from URL
   const pathSegments = location.pathname.split('/').filter(Boolean)
-  const breadcrumbs  = pathSegments.map((segment, idx) => {
-    const path  = `/${pathSegments.slice(0, idx + 1).join('/')}`
-    const label = segment.charAt(0).toUpperCase() + segment.slice(1)
+  const breadcrumbs = pathSegments.map((segment, idx) => {
+    const path = `/${pathSegments.slice(0, idx + 1).join('/')}`
+    const label = segment.charAt(0).toUpperCase() + segment.slice(1).replace('-', ' ')
     return { path, label }
   })
 
@@ -131,32 +219,89 @@ export function Topbar({ onMenuClick }) {
         </nav>
       </div>
 
-      {/* Center: Search input */}
-      <div className="flex-1 max-w-md mx-2 sm:mx-6 flex items-center gap-3">
-        <div className="relative flex-1">
+      {/* Center: Real Role-Scoped Search */}
+      <div className="flex-1 max-w-md mx-2 sm:mx-6 relative" ref={searchContainerRef}>
+        <div className="relative">
           <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-2.5 pointer-events-none" />
           <input
             type="text"
-            placeholder="Search transactions, cards, cases, rules..."
+            id="topbar-search-input"
+            placeholder="Search txn ID, card last 4, cardholder, merchant..."
             value={searchQuery}
+            onFocus={() => {
+              if (searchResults.length > 0) setShowSearchDropdown(true)
+            }}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl bg-neutral-100 border border-transparent focus:bg-white focus:border-neutral-300 focus:outline-none focus:ring-2 focus:ring-primary-500/20 transition"
+            className="w-full pl-9 pr-8 py-1.5 text-xs rounded-xl bg-neutral-100 border border-transparent focus:bg-white focus:border-neutral-300 focus:outline-none focus:ring-2 focus:ring-primary-500/20 transition"
           />
+          {searchLoading && (
+            <Loader2 className="w-3.5 h-3.5 text-neutral-400 animate-spin absolute right-3 top-2.5" />
+          )}
         </div>
 
-        {/* Demo data chip — only shown when VITE_USE_MOCK=true */}
-        {IS_MOCK && (
-          <span
-            title="Running with mock / demo data. Set VITE_USE_MOCK=false to connect to the real backend."
-            className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap cursor-default select-none"
-          >
-            <FlaskConical className="w-3 h-3" />
-            Demo data
-          </span>
+        {/* Search Results Dropdown */}
+        {showSearchDropdown && (
+          <div className="absolute left-0 right-0 mt-2 bg-white rounded-2xl shadow-xl border border-neutral-200 overflow-hidden z-50">
+            <div className="p-2.5 border-b border-neutral-100 flex items-center justify-between text-[11px] font-bold text-neutral-500 uppercase">
+              <span>Matching Transactions</span>
+              <span>{searchResults.length} results</span>
+            </div>
+
+            <div className="max-h-72 overflow-y-auto divide-y divide-neutral-100">
+              {searchResults.length === 0 ? (
+                <div className="p-4 text-center text-xs text-neutral-400">
+                  No records matching &quot;{searchQuery}&quot;
+                </div>
+              ) : (
+                searchResults.map((item) => (
+                  <div
+                    key={item.id || item.publicId}
+                    onClick={() => handleSearchResultClick(item)}
+                    className="p-3 text-xs hover:bg-neutral-50 cursor-pointer transition flex items-center justify-between gap-3"
+                  >
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-neutral-900 truncate">
+                          {item.publicId || item.id}
+                        </span>
+                        <span className="text-[10px] text-neutral-500 font-mono">
+                          •••• {item.cardNumber ? item.cardNumber.slice(-4) : item.last4 || '••••'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-neutral-600 truncate">
+                        <span className="font-medium text-neutral-800">
+                          {item.customerName || item.holderName || 'Cardholder'}
+                        </span>
+                        <span>·</span>
+                        <span className="truncate">{item.merchant || item.merchantName}</span>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <p className="font-bold text-neutral-900 text-xs">
+                        ₹{Number(item.amountINR || item.amountInr || 0).toLocaleString('en-IN')}
+                      </p>
+                      <span
+                        className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-bold uppercase ${
+                          item.status === 'blocked'
+                            ? 'text-rose-600'
+                            : item.status === 'flagged' || item.status === 'review'
+                            ? 'text-amber-600'
+                            : 'text-emerald-600'
+                        }`}
+                      >
+                        {item.status || 'approved'}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         )}
       </div>
 
-      {/* Right: Notifications & User profile menu */}
+      {/* Right: Notification Bell & User profile */}
       <div className="flex items-center gap-3">
         {/* Notification Bell */}
         <div className="relative" ref={notifRef}>
@@ -167,7 +312,7 @@ export function Topbar({ onMenuClick }) {
           >
             <Bell className="w-4 h-4" />
             {unreadCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-risk-500 ring-2 ring-white"></span>
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white"></span>
             )}
           </button>
 
@@ -176,8 +321,8 @@ export function Topbar({ onMenuClick }) {
             <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-xl border border-neutral-200 overflow-hidden z-50">
               <div className="p-3.5 border-b border-neutral-100 flex items-center justify-between">
                 <div>
-                  <h4 className="text-xs font-bold text-neutral-900">Notifications</h4>
-                  <p className="text-[11px] text-neutral-500">{unreadCount} unread alerts</p>
+                  <h4 className="text-xs font-bold text-neutral-900">Live Notifications</h4>
+                  <p className="text-[11px] text-neutral-500">{unreadCount} unread items</p>
                 </div>
                 {unreadCount > 0 && (
                   <button
@@ -196,7 +341,7 @@ export function Topbar({ onMenuClick }) {
                     No new notifications
                   </div>
                 ) : (
-                  notifications.slice(0, 6).map((item) => (
+                  notifications.slice(0, 8).map((item) => (
                     <div
                       key={item.id}
                       onClick={() => handleNotificationClick(item)}
@@ -206,11 +351,13 @@ export function Topbar({ onMenuClick }) {
                     >
                       <div className="flex items-start justify-between gap-2">
                         <span className="font-semibold text-neutral-900">{item.title}</span>
-                        <span className="text-[10px] text-neutral-400 shrink-0">
-                          {formatRelativeTime(item.timestamp)}
+                        <span className="text-[10px] text-neutral-400 shrink-0 font-mono">
+                          {formatRelativeTime(item.timestamp || item.createdAt)}
                         </span>
                       </div>
-                      <p className="text-neutral-600 text-[11px] mt-0.5 line-clamp-2">{item.message}</p>
+                      <p className="text-neutral-600 text-[11px] mt-0.5 line-clamp-2">
+                        {item.message || item.body}
+                      </p>
                     </div>
                   ))
                 )}

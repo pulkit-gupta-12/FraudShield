@@ -127,6 +127,32 @@ export function AnalystDashboard() {
         </div>
       </div>
 
+      {/* Zero State for Fresh Database (Task 13) */}
+      {!loading && (stats?.totalTransactions === 0 || (stats?.openCases === 0 && stats?.activeAlerts === 0 && (stats?.totalTransactions ?? 0) === 0)) && (
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-primary-50 to-indigo-50 border border-primary-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-white rounded-xl shadow-xs text-primary-600 shrink-0">
+              <Zap className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-neutral-900">
+                No activity yet. Make a payment as a customer to see alerts here.
+              </h3>
+              <p className="text-xs text-neutral-600 mt-0.5">
+                Use the Transaction Checker or customer entry points to process real transactions through the XGBoost model.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/checker"
+            className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-xl text-xs font-bold shrink-0 transition shadow-xs flex items-center gap-1.5"
+          >
+            <span>Launch Checker</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+      )}
+
       {/* KPI Cards (DATA RULE #2 - calls src/services/stats.js) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {loading ? (
@@ -140,28 +166,28 @@ export function AnalystDashboard() {
           <>
             <StatCard
               title="Cases Open"
-              value={stats?.openCases ?? 18}
+              value={stats?.openCases ?? 0}
               subtitle="Pending analyst triage"
               icon={Briefcase}
               color="review"
             />
             <StatCard
               title="Active Alerts"
-              value={stats?.activeAlerts ?? 12}
+              value={stats?.activeAlerts ?? 0}
               subtitle="New anomalous events"
               icon={AlertTriangle}
               color="risk"
             />
             <StatCard
               title="Average Risk Score"
-              value="0.14"
-              subtitle="Across recent 24h intake"
+              value={stats?.scoringAvg !== undefined ? `${(stats.scoringAvg).toFixed(2)} ms` : '0.12'}
+              subtitle="Model inference metric"
               icon={Activity}
               color="safe"
             />
             <StatCard
               title="Risky Merchants"
-              value={riskyMerchants.length || 5}
+              value={riskyMerchants.length}
               subtitle="Flagged threshold breach"
               icon={TrendingUp}
               color="primary"
@@ -316,10 +342,10 @@ export function AnalystDashboard() {
             </div>
             <div>
               <h4 className="font-bold text-xs text-neutral-900 group-hover:text-emerald-700">
-                Live Simulator Stream
+                Live Real-Time Feed
               </h4>
               <p className="text-[11px] text-neutral-500 mt-1">
-                Observe sub-20ms ingestion ticker
+                Observe live ingestion stream
               </p>
             </div>
           </Link>

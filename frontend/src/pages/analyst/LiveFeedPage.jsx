@@ -19,7 +19,7 @@ import { THRESHOLD, REVIEW_FLOOR } from '../../config/constants.js'
 import toast from 'react-hot-toast'
 
 /**
- * Screen S12: Real-time Live Transaction Feed & Ingestion Simulator
+ * Screen S12: Real-time Live Transaction Feed
  * Follows DATA RULE #3: Uses poller from services/transactions.js every 3 seconds.
  * Provides Pause / Resume control and cleans up timer on unmount.
  */
@@ -100,7 +100,7 @@ export function LiveFeedPage() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold tracking-tight text-neutral-900">
-              Real-Time Ingestion Feed & Live Simulator
+              Real-Time Ingestion Feed
             </h1>
             <span className="relative flex h-2.5 w-2.5">
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isPaused ? 'bg-amber-400' : 'bg-emerald-400'} opacity-75`} />
@@ -201,7 +201,7 @@ export function LiveFeedPage() {
       <div className="space-y-3">
         {filteredFeed.length === 0 ? (
           <div className="bg-white rounded-2xl border border-neutral-200 p-12 text-center text-xs text-neutral-400">
-            Awaiting streaming transactions from the simulator socket...
+            Awaiting streaming transactions from the real-time feed...
           </div>
         ) : (
           filteredFeed.map((txn, idx) => {

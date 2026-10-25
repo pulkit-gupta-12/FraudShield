@@ -211,6 +211,8 @@ class CaseSerializer(serializers.ModelSerializer):
     transactionId = serializers.CharField(source='transaction.public_id', read_only=True)
     customerName = serializers.SerializerMethodField()
     assignedTo = serializers.SerializerMethodField()
+    source = serializers.CharField(read_only=True)
+    customerReport = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
     closedAt = serializers.DateTimeField(source='closed_at', read_only=True)
@@ -226,6 +228,8 @@ class CaseSerializer(serializers.ModelSerializer):
             'priority',
             'outcome',
             'assignedTo',
+            'source',
+            'customerReport',
             'createdAt',
             'updatedAt',
             'closedAt',
@@ -240,6 +244,18 @@ class CaseSerializer(serializers.ModelSerializer):
 
     def get_assignedTo(self, obj):
         return obj.assignee.name if obj.assignee else (obj.assignee.email if obj.assignee else None)
+
+    def get_customerReport(self, obj):
+        cr = getattr(obj.transaction, 'customer_report', None) if getattr(obj, 'transaction', None) else None
+        if not cr and hasattr(obj, 'customer_reports'):
+            cr = obj.customer_reports.first()
+        if cr:
+            return {
+                'reason': cr.reason,
+                'note': cr.note,
+                'createdAt': cr.created_at,
+            }
+        return None
 
 
 class CaseDetailSerializer(CaseSerializer):
@@ -316,6 +332,9 @@ class DisputeSerializer(serializers.ModelSerializer):
     amount = serializers.FloatField(source='amount_inr', read_only=True)
     evidenceNotes = serializers.CharField(source='evidence_notes', read_only=True)
     evidenceFiles = DisputeEvidenceSerializer(source='evidence_files', many=True, read_only=True)
+    customerNote = serializers.SerializerMethodField()
+    customerReason = serializers.SerializerMethodField()
+    transaction = serializers.SerializerMethodField()
     filedAt = serializers.DateTimeField(source='created_at', read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
 
@@ -325,8 +344,11 @@ class DisputeSerializer(serializers.ModelSerializer):
             'id',
             'disputeId',
             'transactionId',
+            'transaction',
             'customerId',
             'customerName',
+            'customerReason',
+            'customerNote',
             'amountINR',
             'amount',
             'reason',
@@ -346,6 +368,32 @@ class DisputeSerializer(serializers.ModelSerializer):
         if obj.customer_name:
             return obj.customer_name
         return obj.customer.name if obj.customer else ''
+
+    def get_customerNote(self, obj):
+        cr = getattr(obj.transaction, 'customer_report', None) if getattr(obj, 'transaction', None) else None
+        if not cr and hasattr(obj, 'customer_reports'):
+            cr = obj.customer_reports.first()
+        return cr.note if cr else ''
+
+    def get_customerReason(self, obj):
+        cr = getattr(obj.transaction, 'customer_report', None) if getattr(obj, 'transaction', None) else None
+        if not cr and hasattr(obj, 'customer_reports'):
+            cr = obj.customer_reports.first()
+        return cr.reason if cr else obj.reason
+
+    def get_transaction(self, obj):
+        if not getattr(obj, 'transaction', None):
+            return None
+        tx = obj.transaction
+        return {
+            'publicId': tx.public_id,
+            'amountINR': float(tx.amount_inr or 0),
+            'city': tx.city,
+            'timestamp': tx.timestamp,
+            'merchant': tx.merchant_name,
+            'last4': tx.card.last4 if tx.card else '••••',
+            'status': tx.status,
+        }
 
 
 class NotificationSerializer(serializers.ModelSerializer):

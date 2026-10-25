@@ -23,6 +23,8 @@ import { AuditLogsPage } from '../pages/common/AuditLogsPage.jsx'
 import { AdminDashboard } from '../pages/admin/AdminDashboard.jsx'
 import { AdminUsers } from '../pages/admin/AdminUsers.jsx'
 import { AdminConfig } from '../pages/admin/AdminConfig.jsx'
+import { AdminMerchants } from '../pages/admin/AdminMerchants.jsx'
+import { AdminPatterns } from '../pages/admin/AdminPatterns.jsx'
 
 // Analyst Pages
 import { AnalystDashboard } from '../pages/analyst/AnalystDashboard.jsx'
@@ -38,11 +40,13 @@ import { CustomerOverviewPage } from '../pages/customer/CustomerOverviewPage.jsx
 import { MyTransactionsPage } from '../pages/customer/MyTransactionsPage.jsx'
 import { CustomerAlertsPage } from '../pages/customer/CustomerAlertsPage.jsx'
 import { DisputePage } from '../pages/customer/DisputePage.jsx'
+import { UseMyCardPage } from '../pages/customer/UseMyCardPage.jsx'
 
 // Merchant Pages
 import { MerchantOverviewPage } from '../pages/merchant/MerchantOverviewPage.jsx'
 import { MerchantChargebacksPage } from '../pages/merchant/MerchantChargebacksPage.jsx'
 import { MerchantReportsPage } from '../pages/merchant/MerchantReportsPage.jsx'
+import { MerchantTerminalPage } from '../pages/merchant/MerchantTerminalPage.jsx'
 
 export function AppRoutes() {
   return (
@@ -76,6 +80,8 @@ export function AppRoutes() {
             <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/users" element={<AdminUsers />} />
+            <Route path="/admin/merchants" element={<AdminMerchants />} />
+            <Route path="/admin/patterns" element={<AdminPatterns />} />
             <Route path="/admin/config" element={<AdminConfig />} />
           </Route>
 
@@ -95,6 +101,7 @@ export function AppRoutes() {
           {/* Customer Routes */}
           <Route element={<RoleRoute allowedRoles={['customer']} />}>
             <Route path="/customer" element={<Navigate to="/customer/overview" replace />} />
+            <Route path="/customer/pay" element={<UseMyCardPage />} />
             <Route path="/customer/overview" element={<CustomerOverviewPage />} />
             <Route path="/customer/cards" element={<CustomerOverviewPage />} />
             <Route path="/customer/transactions" element={<MyTransactionsPage />} />
@@ -105,6 +112,7 @@ export function AppRoutes() {
           {/* Merchant Routes */}
           <Route element={<RoleRoute allowedRoles={['merchant', 'admin']} />}>
             <Route path="/merchant" element={<Navigate to="/merchant/overview" replace />} />
+            <Route path="/merchant/terminal" element={<MerchantTerminalPage />} />
             <Route path="/merchant/overview" element={<MerchantOverviewPage />} />
             <Route path="/merchant/chargebacks" element={<MerchantChargebacksPage />} />
             <Route path="/merchant/reports" element={<MerchantReportsPage />} />

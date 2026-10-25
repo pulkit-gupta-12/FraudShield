@@ -231,3 +231,106 @@ export async function getLiveTransactions(since) {
 export function resetLiveFeed() {
   _liveLastTimestamp = null
 }
+
+// ─── POST /api/transactions/submit/ ───────────────────────────────────────────
+
+export async function submitTransaction(payload) {
+  if (!USE_MOCK) {
+    const { data } = await apiClient.post('/transactions/submit/', payload)
+    return data
+  }
+
+  await delay(400, 700)
+  const amount = Number(payload.amount || 1000)
+  const isDeclined = amount > 200000
+  const riskScore = isDeclined ? null : Number((0.05 + Math.random() * 0.9).toFixed(3))
+  const decision = isDeclined
+    ? 'declined'
+    : riskScore >= THRESHOLD
+    ? 'blocked'
+    : riskScore >= REVIEW_FLOOR
+    ? 'review'
+    : 'approved'
+
+  const mockTxn = {
+    id: `TXN-${Date.now()}`,
+    amountINR: amount,
+    city: payload.city || 'Mumbai',
+    merchant: payload.merchantName || 'Mock Merchant',
+    status: decision === 'review' ? 'flagged' : decision,
+    riskScore,
+    band: decision,
+    timestamp: payload.occurredAt || new Date().toISOString(),
+  }
+
+  return {
+    transaction: mockTxn,
+    decision,
+    reason: decision === 'declined' ? 'limit_exceeded' : decision,
+    reasons: isDeclined
+      ? ['Transaction declined: amount exceeds card spending limit.']
+      : riskScore >= REVIEW_FLOOR
+      ? ['High-risk merchant category detected', 'Unusual transaction timing']
+      : ['Typical purchase behavior verified'],
+    riskScore,
+    band: decision,
+    threshold: THRESHOLD,
+    reviewFloor: REVIEW_FLOOR,
+    factors: [
+      { feature: 'Amount', impact: 0.35, description: 'Transaction size' },
+      { feature: 'V14', impact: 0.28, description: 'Behavior factor 14' },
+      { feature: 'V4', impact: -0.15, description: 'Protective velocity indicator' },
+    ],
+    alertId: decision === 'review' ? 101 : null,
+    caseId: decision === 'review' ? 201 : null,
+  }
+}
+
+// ─── POST /api/transactions/{id}/report/ ─────────────────────────────────────
+
+export async function reportTransaction(id, { reason, note }) {
+  if (!USE_MOCK) {
+    const { data } = await apiClient.post(`/transactions/${id}/report/`, { reason, note })
+    return data
+  }
+
+  await delay(300, 600)
+  return {
+    success: true,
+    message: 'Report filed successfully. Our fraud operations team has been notified.',
+    reportId: Date.now(),
+    caseId: 301,
+    disputeId: 401,
+  }
+}
+
+// ─── GET /api/reports/mine/ ──────────────────────────────────────────────────
+
+export async function getMyReports() {
+  if (!USE_MOCK) {
+    const { data } = await apiClient.get('/reports/mine/')
+    return Array.isArray(data) ? { results: data, count: data.length } : data
+  }
+
+  await delay(300, 500)
+  return {
+    results: [
+      {
+        id: 1,
+        transaction: {
+          publicId: 'TXN-984210',
+          amountInr: 12450,
+          merchantName: 'Unrecognized Tech Mart',
+          timestamp: new Date(Date.now() - 86400000).toISOString(),
+        },
+        reason: 'unauthorized',
+        note: 'I never made this purchase in Chennai.',
+        createdAt: new Date(Date.now() - 86400000).toISOString(),
+        case: { id: 101, status: 'in_investigation', priority: 'high' },
+        dispute: { id: 201, stage: 'evidence_collection', status: 'open' },
+      },
+    ],
+    count: 1,
+  }
+}
+

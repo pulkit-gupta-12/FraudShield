@@ -245,6 +245,35 @@ export function CaseDetailPage({ caseId: propCaseId, onClose }) {
         </div>
       </div>
 
+      {/* Customer Report Banner Card (Task 12) */}
+      {(caseData.source === 'customer_report' || caseData.customerReport) && (
+        <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200 shadow-xs space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-amber-900 font-bold text-xs uppercase tracking-wide">
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
+              <span>Customer Report</span>
+            </div>
+            <span className="text-xs font-mono text-amber-700">
+              {caseData.customerReport?.createdAt
+                ? new Date(caseData.customerReport.createdAt).toLocaleString('en-IN')
+                : new Date(caseData.createdAt).toLocaleString('en-IN')}
+            </span>
+          </div>
+          <div className="text-xs text-amber-950 space-y-1.5">
+            <p>
+              <strong className="font-bold">Reason:</strong>{' '}
+              <span className="capitalize font-semibold">
+                {(caseData.customerReport?.reason || caseData.reason || 'Unauthorized Transaction').replace('_', ' ')}
+              </span>
+            </p>
+            <div className="p-3 rounded-xl bg-white/80 border border-amber-200/60 text-neutral-900 font-medium">
+              <span className="text-[10px] text-neutral-400 block font-bold uppercase mb-0.5">Cardholder Note:</span>
+              &quot;{caseData.customerReport?.note || caseData.note || 'Cardholder disputed charge as unrecognized/fraudulent.'}&quot;
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Case Metadata & Risk Gauge Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Transaction Metadata Card */}

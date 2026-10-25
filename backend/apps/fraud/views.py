@@ -522,7 +522,11 @@ class TransactionViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
             model_inputs=features,
             source=source,
         )
-        process_transaction(txn, save=True, threshold=t_val, review_floor=rf_val)
+        should_save = True
+        if user.role in ('admin', 'analyst') and data.get('save') is False:
+            should_save = False
+
+        process_transaction(txn, save=should_save, threshold=t_val, review_floor=rf_val)
 
         if txn.status == 'blocked':
             decision = 'blocked'
@@ -532,18 +536,19 @@ class TransactionViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
             decision = 'approved'
 
         plain_reasons = generate_plain_reasons(txn.factors, amount, txn.band(t_val, rf_val))
-        alert = txn.alerts.first()
-        case = txn.cases.first()
+        alert = txn.alerts.first() if should_save and txn.pk else None
+        case = txn.cases.first() if should_save and txn.pk else None
 
-        AuditLog.objects.create(
-            actor=user.email,
-            role=user.role,
-            action='TRANSACTION_SUBMITTED',
-            target=public_id,
-            status='SUCCESS',
-            details=f"Transaction submitted: Rs. {amount} at {merchant_name} -> {decision} (score: {txn.risk_score})",
-            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
-        )
+        if should_save:
+            AuditLog.objects.create(
+                actor=user.email,
+                role=user.role,
+                action='TRANSACTION_SUBMITTED',
+                target=public_id,
+                status='SUCCESS',
+                details=f"Transaction submitted: Rs. {amount} at {merchant_name} -> {decision} (score: {txn.risk_score})",
+                ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),
+            )
 
         return Response({
             'transaction': txn.to_display_dict(t_val, rf_val),

@@ -9,30 +9,51 @@ import {
   Bell,
   Clock,
   ArrowRight,
+  FileCheck2,
+  Layers,
+  Flag,
+  AlertTriangle,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext.jsx'
 import { getAlerts, updateAlert } from '../../services/alerts.js'
 import { getCards, updateCardStatus } from '../../services/cards.js'
 import { createNotification } from '../../services/notifications.js'
+import { getMyReports } from '../../services/transactions.js'
 import { AlertCard } from '../../components/ui/AlertCard.jsx'
 import { ErrorState } from '../../components/ui/ErrorState.jsx'
 import { Skeleton } from '../../components/ui/Skeleton.jsx'
 import { EmptyState } from '../../components/ui/EmptyState.jsx'
 import { Modal } from '../../components/ui/Modal.jsx'
 import { StatCard } from '../../components/ui/StatCard.jsx'
+import { Stepper } from '../../components/ui/Stepper.jsx'
 import toast from 'react-hot-toast'
+
+const DISPUTE_STEPS = [
+  { label: 'Evidence Collection', description: 'Merchant gathering proof' },
+  { label: 'Under Review', description: 'Analyst inspecting dispute' },
+  { label: 'Arbitration', description: 'Network ruling' },
+  { label: 'Resolved', description: 'Final decision settled' },
+]
+
+function getDisputeStepIndex(stage, status) {
+  const s = (stage || status || '').toLowerCase()
+  if (s === 'resolved' || s === 'closed' || s === 'won' || s === 'lost') return 3
+  if (s === 'arbitration') return 2
+  if (s === 'under_review' || s === 'review') return 1
+  return 0 // evidence_collection or open
+}
 
 /**
  * Screen S18: Security & Alerts Desk
- * Follows DATA RULE #1: Server-side pagination & filter querying.
- * When the customer answers 'No, not me' on an alert:
- * 1. Updates alert to 'fraud_confirmed'
- * 2. Creates a notification
- * 3. Prompts user to block the card (which marks card as 'blocked')
+ * Tabs:
+ *  1. Security Alerts: Real-time fraud warnings
+ *  2. My Reports: Customer reported transactions with live case status and merchant dispute Stepper
  */
 export function CustomerAlertsPage() {
   const { user } = useAuth()
+  const [activeTab, setActiveTab] = useState('alerts') // 'alerts' | 'reports'
 
+  // Alerts State
   const [alerts, setAlerts] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [page, setPage] = useState(1)
@@ -41,34 +62,101 @@ export function CustomerAlertsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [actionLoading, setActionLoading] = useState(false)
+  const [newAlertIds, setNewAlertIds] = useState(new Set())
+
+  // My Reports State
+  const [reports, setReports] = useState([])
+  const [reportsLoading, setReportsLoading] = useState(false)
+  const [reportsError, setReportsError] = useState(null)
 
   // Card block confirmation modal state
   const [blockModalCard, setBlockModalCard] = useState(null)
   const [reportedAlert, setReportedAlert] = useState(null)
 
-  const fetchAlerts = useCallback(async () => {
-    if (!user) return
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await getAlerts({
-        page,
-        pageSize,
-        status: statusFilter,
-        userId: user.id, // Only logged-in customer's own alerts
-      })
-      setAlerts(res.results || [])
-      setTotalCount(res.count || 0)
-    } catch (err) {
-      setError(err.message || 'Failed to load security alerts')
-    } finally {
-      setLoading(false)
-    }
-  }, [user, page, pageSize, statusFilter])
+  // Fetch Alerts
+  const fetchAlerts = useCallback(
+    async (isPolling = false) => {
+      if (!user) return
+      if (!isPolling) setLoading(true)
+      setError(null)
+      try {
+        const res = await getAlerts({
+          page,
+          pageSize,
+          status: statusFilter,
+          userId: user.id,
+        })
+        const list = res.results || []
 
+        if (isPolling) {
+          setAlerts((prev) => {
+            const prevIds = new Set(prev.map((a) => a.id))
+            const fresh = new Set()
+            list.forEach((a) => {
+              if (!prevIds.has(a.id)) fresh.add(a.id)
+            })
+            if (fresh.size > 0) {
+              setNewAlertIds(fresh)
+              setTimeout(() => setNewAlertIds(new Set()), 3500)
+            }
+            return list
+          })
+        } else {
+          setAlerts(list)
+        }
+        setTotalCount(res.count || 0)
+      } catch (err) {
+        setError(err.message || 'Failed to load security alerts')
+      } finally {
+        setLoading(false)
+      }
+    },
+    [user, page, pageSize, statusFilter]
+  )
+
+  // Fetch Reports
+  const fetchReports = useCallback(
+    async (isPolling = false) => {
+      if (!user) return
+      if (!isPolling) setReportsLoading(true)
+      setReportsError(null)
+      try {
+        const res = await getMyReports()
+        setReports(res.results || [])
+      } catch (err) {
+        setReportsError(err.message || 'Failed to load customer reports')
+      } finally {
+        setReportsLoading(false)
+      }
+    },
+    [user]
+  )
+
+  // Initial and 10s polling
   useEffect(() => {
-    fetchAlerts()
-  }, [fetchAlerts])
+    fetchAlerts(false)
+    fetchReports(false)
+
+    const interval = setInterval(() => {
+      fetchAlerts(true)
+      fetchReports(true)
+    }, 10000)
+
+    const handleFocus = () => {
+      fetchAlerts(true)
+      fetchReports(true)
+    }
+
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') handleFocus()
+    })
+
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [fetchAlerts, fetchReports])
 
   // "Yes, that was me"
   const handleConfirmLegit = async (alert) => {
@@ -76,7 +164,7 @@ export function CustomerAlertsPage() {
     try {
       await updateAlert(alert.id, { status: 'safe_confirmed' })
       toast.success('Thank you! Alert resolved as authorized by you.')
-      fetchAlerts()
+      fetchAlerts(true)
     } catch (err) {
       toast.error(err.message || 'Failed to update alert')
     } finally {
@@ -84,14 +172,11 @@ export function CustomerAlertsPage() {
     }
   }
 
-  // "No, not me" -> CRITICAL REQUIREMENT
+  // "No, not me"
   const handleReportFraud = async (alert) => {
     setActionLoading(true)
     try {
-      // 1. Update alert
       await updateAlert(alert.id, { status: 'fraud_confirmed' })
-
-      // 2. Create notification
       await createNotification({
         title: 'Unauthorized Transaction Flagged',
         message: `Alert ${alert.id} for ₹${alert.amountINR || alert.amount} at ${alert.merchant} flagged as unauthorized.`,
@@ -99,34 +184,34 @@ export function CustomerAlertsPage() {
         userId: user?.id,
       })
 
-      setReportedAlert(alert)
-
-      // 3. Find card to offer blocking
       const cardsRes = await getCards({ userId: user?.id })
-      const activeCard = (cardsRes.results || []).find((c) => c.status !== 'blocked') || cardsRes.results?.[0]
+      const matchingCard = cardsRes.results?.find(
+        (c) =>
+          c.cardNumber?.slice(-4) === alert.cardNumber?.slice(-4) ||
+          c.last4 === alert.cardNumber?.slice(-4)
+      )
 
-      if (activeCard) {
-        setBlockModalCard(activeCard)
+      if (matchingCard && matchingCard.status !== 'blocked') {
+        setReportedAlert(alert)
+        setBlockModalCard(matchingCard)
       } else {
-        toast.success('Alert marked as fraud and escalated to our security team.')
+        toast.error('Alert confirmed as fraud. Operations team dispatched.')
       }
 
-      fetchAlerts()
+      fetchAlerts(true)
     } catch (err) {
-      toast.error(err.message || 'Failed to process fraud report')
+      toast.error(err.message || 'Failed to report fraud')
     } finally {
       setActionLoading(false)
     }
   }
 
-  // Confirm card block in modal
   const handleConfirmCardBlock = async () => {
     if (!blockModalCard) return
     try {
       await updateCardStatus(blockModalCard.id, 'blocked')
       toast.success(
-        `Card ending in ${blockModalCard.cardNumber.slice(-4)} has been BLOCKED. It now displays the red BLOCKED badge across your account.`,
-        { icon: '🛡️', duration: 4500 },
+        `Card ending in ${blockModalCard.cardNumber?.slice(-4)} has been blocked successfully.`
       )
       setBlockModalCard(null)
       setReportedAlert(null)
@@ -138,126 +223,197 @@ export function CustomerAlertsPage() {
   return (
     <div className="space-y-8 max-w-6xl mx-auto pb-12">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-5 border-b border-neutral-200">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-neutral-200">
         <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-neutral-900">
-              Security & Fraud Alerts Center
-            </h1>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 uppercase tracking-wider">
-              Real-Time Defense
-            </span>
-          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-neutral-900">
+            Security & Alerts Desk
+          </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Review anomalous charges detected by our AI engine and take protective action immediately
+            Real-time step-up verifications and tracking for your reported disputes.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={fetchAlerts}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-neutral-200 text-neutral-700 hover:bg-neutral-50 text-xs font-semibold shadow-xs transition w-fit"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh Alerts
-        </button>
-      </div>
-
-      {/* Filter Tabs */}
-      <div className="flex items-center gap-2 border-b border-neutral-200 pb-3">
-        {[
-          { id: 'ALL', label: 'All Alerts' },
-          { id: 'new', label: 'Action Required' },
-          { id: 'safe_confirmed', label: 'Verified Safe' },
-          { id: 'fraud_confirmed', label: 'Reported Fraud' },
-        ].map((tab) => (
+        {/* Tab Switcher */}
+        <div className="flex items-center p-1 bg-neutral-100 rounded-xl border border-neutral-200 self-start sm:self-auto">
           <button
-            key={tab.id}
-            type="button"
-            onClick={() => {
-              setStatusFilter(tab.id)
-              setPage(1)
-            }}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
-              statusFilter === tab.id
-                ? 'bg-neutral-900 text-white shadow-xs'
-                : 'bg-white text-neutral-600 hover:bg-neutral-100 border border-neutral-200'
+            onClick={() => setActiveTab('alerts')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
+              activeTab === 'alerts'
+                ? 'bg-white text-neutral-900 shadow-xs'
+                : 'text-neutral-500 hover:text-neutral-800'
             }`}
           >
-            {tab.label}
+            <ShieldAlert className="w-4 h-4 text-primary-600" />
+            <span>Security Alerts</span>
+            {totalCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-primary-100 text-primary-700 font-mono">
+                {totalCount}
+              </span>
+            )}
           </button>
-        ))}
+          <button
+            onClick={() => setActiveTab('reports')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
+              activeTab === 'reports'
+                ? 'bg-white text-neutral-900 shadow-xs'
+                : 'text-neutral-500 hover:text-neutral-800'
+            }`}
+          >
+            <Flag className="w-4 h-4 text-amber-600" />
+            <span>My Reports</span>
+            {reports.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-100 text-amber-800 font-mono">
+                {reports.length}
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
-      {/* Alert Cards Grid / Error State (DATA RULE #4) */}
-      {error ? (
-        <ErrorState
-          title="Security Center Offline"
-          message={error}
-          onRetry={fetchAlerts}
-        />
-      ) : loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Skeleton className="h-44 rounded-2xl" />
-          <Skeleton className="h-44 rounded-2xl" />
-          <Skeleton className="h-44 rounded-2xl" />
-          <Skeleton className="h-44 rounded-2xl" />
-        </div>
-      ) : alerts.length === 0 ? (
-        <EmptyState
-          title="No security advisories"
-          description="Your cards have no pending fraud alerts matching this filter."
-          action={
-            <button
-              type="button"
-              onClick={() => {
-                setStatusFilter('ALL')
-                setPage(1)
-              }}
-              className="px-4 py-2 bg-primary-600 text-white rounded-xl text-xs font-semibold"
-            >
-              Reset Filter
-            </button>
-          }
-        />
-      ) : (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {alerts.map((alert) => (
-              <AlertCard
-                key={alert.id}
-                alert={alert}
-                loading={actionLoading}
-                onConfirmLegit={handleConfirmLegit}
-                onReportFraud={handleReportFraud}
-              />
-            ))}
+      {/* ──────────────── TAB 1: ALERTS ──────────────── */}
+      {activeTab === 'alerts' && (
+        <div className="space-y-6">
+          {/* Quick Filter Bar */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
+              Filter by Status
+            </span>
+            <div className="flex items-center gap-2">
+              {['ALL', 'new', 'fraud_confirmed', 'safe_confirmed'].map((status) => (
+                <button
+                  key={status}
+                  onClick={() => {
+                    setStatusFilter(status)
+                    setPage(1)
+                  }}
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+                    statusFilter === status
+                      ? 'bg-neutral-900 text-white'
+                      : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                  }`}
+                >
+                  {status === 'ALL'
+                    ? 'All'
+                    : status === 'new'
+                    ? 'Pending Action'
+                    : status.replace('_', ' ')}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Simple pagination footer for server-side alerts */}
-          {totalCount > pageSize && (
-            <div className="flex items-center justify-between pt-4 border-t border-neutral-200 text-xs">
-              <span className="text-neutral-500">
-                Page {page} of {Math.ceil(totalCount / pageSize)} ({totalCount} total)
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => p - 1)}
-                  className="px-3 py-1.5 rounded-lg border bg-white disabled:opacity-50 font-semibold"
+          {loading && alerts.length === 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Skeleton className="h-44 rounded-2xl" />
+              <Skeleton className="h-44 rounded-2xl" />
+            </div>
+          ) : alerts.length === 0 ? (
+            <EmptyState
+              title="No security advisories"
+              description="Your cards have no pending fraud alerts matching this filter."
+            />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {alerts.map((alert) => (
+                <div
+                  key={alert.id}
+                  className={newAlertIds.has(alert.id) ? 'ring-2 ring-primary-500/50 rounded-2xl' : ''}
                 >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={page >= Math.ceil(totalCount / pageSize)}
-                  onClick={() => setPage((p) => p + 1)}
-                  className="px-3 py-1.5 rounded-lg border bg-white disabled:opacity-50 font-semibold"
-                >
-                  Next
-                </button>
-              </div>
+                  <AlertCard
+                    alert={alert}
+                    loading={actionLoading}
+                    onConfirmLegit={handleConfirmLegit}
+                    onReportFraud={handleReportFraud}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ──────────────── TAB 2: MY REPORTS ──────────────── */}
+      {activeTab === 'reports' && (
+        <div className="space-y-6">
+          {reportsLoading && reports.length === 0 ? (
+            <div className="space-y-4">
+              <Skeleton className="h-48 rounded-2xl" />
+              <Skeleton className="h-48 rounded-2xl" />
+            </div>
+          ) : reports.length === 0 ? (
+            <EmptyState
+              title="No disputes or reports filed"
+              description="You haven't reported any suspicious transactions. Any reported charges will appear here with live case and merchant dispute status."
+            />
+          ) : (
+            <div className="space-y-5">
+              {reports.map((rep) => {
+                const tx = rep.transaction || {}
+                const c = rep.case || {}
+                const d = rep.dispute || {}
+                const stepIdx = getDisputeStepIndex(d.stage, d.status)
+
+                return (
+                  <div
+                    key={rep.id}
+                    className="p-6 bg-white border border-neutral-200/80 rounded-2xl shadow-xs space-y-5"
+                  >
+                    {/* Header Row */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-neutral-100">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-bold text-neutral-400">
+                            REF: {tx.publicId || tx.id || `TXN-${rep.id}`}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 uppercase">
+                            {rep.reason?.replace('_', ' ') || 'Disputed'}
+                          </span>
+                        </div>
+                        <h3 className="text-lg font-extrabold text-neutral-900 mt-1">
+                          ₹{Number(tx.amountInr || tx.amountINR || 0).toLocaleString('en-IN')}{' '}
+                          <span className="text-xs font-normal text-neutral-500">
+                            at {tx.merchantName || tx.merchant || 'Merchant'}
+                          </span>
+                        </h3>
+                      </div>
+
+                      {/* Case Status Pill */}
+                      <div className="flex items-center gap-2 self-start sm:self-auto">
+                        <span className="text-xs text-neutral-500 font-semibold">Case Status:</span>
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-primary-50 text-primary-700 border border-primary-200 uppercase">
+                          {c.status?.replace('_', ' ') || 'In Investigation'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Customer Report Note */}
+                    <div className="p-3.5 rounded-xl bg-neutral-50 border border-neutral-200/60 text-xs space-y-1">
+                      <span className="font-bold text-neutral-700 uppercase text-[10px]">
+                        Your Dispute Statement
+                      </span>
+                      <p className="text-neutral-800 leading-relaxed font-medium">
+                        &quot;{rep.note || 'No statement provided'}&quot;
+                      </p>
+                      <span className="text-[10px] text-neutral-400 block pt-1 font-mono">
+                        Reported on {new Date(rep.createdAt).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+
+                    {/* Merchant Dispute Stepper */}
+                    <div className="pt-2">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-700">
+                          Merchant Dispute Defense Progress
+                        </h4>
+                        <span className="text-[11px] font-mono text-neutral-400 font-bold">
+                          Stage: {d.stage || 'evidence_collection'}
+                        </span>
+                      </div>
+                      <Stepper steps={DISPUTE_STEPS} currentStep={stepIdx} />
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
@@ -288,7 +444,7 @@ export function CustomerAlertsPage() {
             <span className="font-mono font-bold text-neutral-900">
               {blockModalCard?.cardNumber?.slice(-4)}
             </span>
-            ? A blocked card cannot be used for any further POS, ATM, or online payments.
+            ? A blocked card cannot be used for any further payments.
           </p>
 
           <div className="flex justify-end gap-3 pt-3 border-t border-neutral-100">
@@ -301,9 +457,8 @@ export function CustomerAlertsPage() {
             </button>
             <button
               type="button"
-              id="confirm-card-block-action"
               onClick={handleConfirmCardBlock}
-              className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-xs font-bold text-white shadow-sm shadow-red-600/30 flex items-center gap-1.5"
+              className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-xs font-bold text-white shadow-sm flex items-center gap-1.5"
             >
               <Lock className="w-3.5 h-3.5" />
               Yes, Block This Card

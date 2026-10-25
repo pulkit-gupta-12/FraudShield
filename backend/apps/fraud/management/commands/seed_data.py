@@ -211,10 +211,10 @@ class Command(BaseCommand):
         # 3. Seed Demo Users (4 demo users)
         demo_merchant = merchants[0]  # Reliance Fresh / Reliance Digital
         demo_definitions = [
-            ("admin@fraudshield.com", "admin@fraudshield.io", "Admin User", "admin", "Admin@123", "Security & Administration", "FraudShield Global", True, True, None),
-            ("analyst@fraudshield.com", "analyst@fraudshield.io", "Lead Analyst", "analyst", "Analyst@123", "Fraud Investigation Unit", "FraudShield Global", False, False, None),
-            ("customer@fraudshield.com", "customer@fraudshield.io", "Aarav Sharma", "customer", "Customer@123", "Retail Customer", "Personal Account", False, False, None),
-            ("merchant@fraudshield.com", "merchant@fraudshield.io", "Merchant Partner", "merchant", "Merchant@123", "Merchant Operations", demo_merchant.name, False, False, demo_merchant),
+            ("admin@fraudshield.com", "admin@fraudshield.io", "Admin User", "admin", "password123", "Security & Administration", "FraudShield Global", True, True, None),
+            ("analyst@fraudshield.com", "analyst@fraudshield.io", "Lead Analyst", "analyst", "password123", "Fraud Investigation Unit", "FraudShield Global", False, False, None),
+            ("customer@fraudshield.com", "customer@fraudshield.io", "Aarav Sharma", "customer", "password123", "Retail Customer", "Personal Account", False, False, None),
+            ("merchant@fraudshield.com", "merchant@fraudshield.io", "Merchant Partner", "merchant", "password123", "Merchant Operations", demo_merchant.name, False, False, demo_merchant),
         ]
 
         demo_users_map = {}

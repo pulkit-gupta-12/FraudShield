@@ -58,6 +58,7 @@ export function DataTable({
   pageSize = 10,
   emptyMessage = 'No records found',
   className = '',
+  rowClassName,
   // Server-side props
   totalCount,
   page: controlledPage,
@@ -243,7 +244,10 @@ export function DataTable({
                   onClick={() => onRowClick && onRowClick(row)}
                   className={clsx(
                     'transition-colors',
-                    onRowClick ? 'cursor-pointer hover:bg-primary-50/40' : 'hover:bg-neutral-50/60'
+                    rowClassName
+                      ? rowClassName(row)
+                      : (onRowClick ? 'cursor-pointer hover:bg-primary-50/40' : 'hover:bg-neutral-50/60'),
+                    onRowClick && 'cursor-pointer'
                   )}
                 >
                   {columns.map((col) => (

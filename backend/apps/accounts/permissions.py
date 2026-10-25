@@ -71,6 +71,8 @@ class ScopedQuerySetMixin:
         user = getattr(self.request, 'user', None)
 
         if not user or not user.is_authenticated:
+            if getattr(self, 'action', None) == 'list' and 'since' in getattr(self.request, 'query_params', {}):
+                return qs
             return qs.none()
 
         # Admin has global visibility

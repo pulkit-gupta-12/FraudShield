@@ -15,6 +15,11 @@ export function ModelConfigProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   const fetchConfig = useCallback(async () => {
+    const token = localStorage.getItem('fraudshield_access')
+    if (!token) {
+      setLoading(false)
+      return
+    }
     try {
       setLoading(true)
       const data = await getSystemConfig().catch(() => getModelInfo())
@@ -32,7 +37,7 @@ export function ModelConfigProvider({ children }) {
         }
       }
     } catch (err) {
-      console.warn('Could not fetch model config, using defaults:', err)
+      // Fall back to default constants
     } finally {
       setLoading(false)
     }

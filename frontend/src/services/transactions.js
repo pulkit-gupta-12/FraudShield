@@ -187,10 +187,12 @@ let _liveLastTimestamp = null
 
 export async function getLiveTransactions(since) {
   if (!USE_MOCK) {
-    const timestamp = since !== undefined ? since : _liveLastTimestamp
-    const params = timestamp
-      ? { since: timestamp, ordering: '-timestamp' }
-      : { ordering: '-timestamp', pageSize: 10 }
+    const timestamp = (since !== undefined && since !== null) ? since : (_liveLastTimestamp || '')
+    const params = {
+      since: timestamp,
+      ordering: '-timestamp',
+      pageSize: 10,
+    }
     const { data } = await apiClient.get('/transactions/', { params })
     if (data.results?.length) {
       _liveLastTimestamp = data.results[0].timestamp

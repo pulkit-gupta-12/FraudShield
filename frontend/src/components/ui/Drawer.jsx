@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { X } from 'lucide-react'
 
@@ -45,7 +46,7 @@ export function Drawer({
     lg: 'max-w-2xl',
   }
 
-  return (
+  const drawerNode = (
     <div className="fixed inset-0 z-50 overflow-hidden">
       <div className="absolute inset-0 overflow-hidden">
         {/* Backdrop */}
@@ -94,4 +95,6 @@ export function Drawer({
       </div>
     </div>
   )
+
+  return createPortal(drawerNode, document.body)
 }

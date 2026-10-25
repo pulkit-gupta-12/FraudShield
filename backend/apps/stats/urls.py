@@ -8,9 +8,11 @@ from apps.stats.views import (
     stats_analyst,
     stats_merchant,
     stats_customer,
+    public_summary,
 )
 
 urlpatterns = [
+    path('public/summary/', public_summary, name='public_summary'),
     path('stats/overview/', stats_overview, name='stats_overview'),
     path('stats/timeseries/', stats_timeseries, name='stats_timeseries'),
     path('stats/by-hour/', stats_by_hour, name='stats_by_hour'),

@@ -60,16 +60,17 @@ class ReportBuilderView(APIView):
 
         # Role scoping
         is_admin = user.role == 'admin' or user.is_superuser
+        is_analyst = user.role == 'analyst'
         is_merchant = user.role == 'merchant'
 
         if is_merchant:
             if report_type not in MERCHANT_REPORTS:
                 raise PermissionDenied(f"Merchant role does not have permission to access '{report_type}' report.")
-        elif is_admin:
+        elif is_admin or is_analyst:
             if report_type not in ADMIN_REPORTS and report_type not in MERCHANT_REPORTS:
                 raise ValidationError({'type': f"Unknown report type: '{report_type}'."})
         else:
-            # Customers and Analysts
+            # Customers
             raise PermissionDenied("You do not have permission to access reports.")
 
         date_from = request.query_params.get('dateFrom')

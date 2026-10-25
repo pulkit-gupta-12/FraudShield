@@ -141,37 +141,40 @@ export function ResultPanel({ result, onReset, className = '' }) {
       {/* 2. Visualizations Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
         {/* RiskMeter Card */}
-        <div className="p-5 bg-white border border-neutral-200/80 rounded-2xl shadow-xs space-y-3">
-          <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-700">
-              Risk Evaluation Gauge
-            </h3>
-            <span className="text-[11px] font-mono font-bold text-neutral-500">
-              Floor: {(reviewFloor * 100).toFixed(0)} | Cutoff: {(threshold * 100).toFixed(0)}
+        <div className="p-6 bg-white border border-neutral-200/90 rounded-2xl shadow-xs space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-neutral-100">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-primary-600 animate-pulse" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-800">
+                Risk Evaluation Gauge
+              </h3>
+            </div>
+            <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md bg-neutral-100 text-neutral-600">
+              Floor: {(reviewFloor * 100).toFixed(0)} · Cutoff: {(threshold * 100).toFixed(0)}
             </span>
           </div>
 
-          <div className="flex justify-center py-2">
+          <div className="flex justify-center items-center py-2">
             <RiskMeter
               score={riskScore ?? 0}
               threshold={Math.round(threshold * 100)}
               warningThreshold={Math.round(reviewFloor * 100)}
-              size={210}
+              size={220}
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-2 text-center text-[10px] font-semibold text-neutral-500 pt-1 border-t border-neutral-100">
-            <div>
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1" />
-              Low (&lt;{(reviewFloor * 100).toFixed(0)})
+          <div className="grid grid-cols-3 gap-2 text-center text-[10px] font-bold text-neutral-600 pt-3 border-t border-neutral-100">
+            <div className="flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-emerald-50/80 text-emerald-700 border border-emerald-200/60">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>Safe (&lt;{(reviewFloor * 100).toFixed(0)})</span>
             </div>
-            <div>
-              <span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1" />
-              Review ({(reviewFloor * 100).toFixed(0)}-{(threshold * 100).toFixed(0)})
+            <div className="flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-amber-50/80 text-amber-700 border border-amber-200/60">
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span>Review ({(reviewFloor * 100).toFixed(0)}-{(threshold * 100).toFixed(0)})</span>
             </div>
-            <div>
-              <span className="inline-block w-2 h-2 rounded-full bg-rose-500 mr-1" />
-              Fraud (&ge;{(threshold * 100).toFixed(0)})
+            <div className="flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-rose-50/80 text-rose-700 border border-rose-200/60">
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+              <span>Fraud (&ge;{(threshold * 100).toFixed(0)})</span>
             </div>
           </div>
         </div>

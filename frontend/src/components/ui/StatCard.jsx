@@ -15,14 +15,20 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
  */
 export function StatCard({
   title,
+  label,
   value,
   icon,
   trend,
   trendDirection,
   subtitle,
+  subtext,
   color = 'primary',
   className = '',
+  loading = false,
 }) {
+  const heading = title || label || ''
+  const description = subtitle || subtext || ''
+
   const isPositiveTrend = trendDirection ? trendDirection === 'up' : typeof trend === 'number' ? trend > 0 : String(trend).startsWith('+')
   const isNeutralTrend = trendDirection === 'neutral' || trend == null
 
@@ -30,7 +36,9 @@ export function StatCard({
     primary: 'bg-primary-50 text-primary-600',
     safe: 'bg-safe-50 text-safe-600',
     review: 'bg-review-50 text-review-600',
+    warning: 'bg-amber-50 text-amber-600',
     risk: 'bg-risk-50 text-risk-600',
+    danger: 'bg-red-50 text-red-600',
     neutral: 'bg-neutral-100 text-neutral-600',
   }
 
@@ -42,7 +50,7 @@ export function StatCard({
       )}
     >
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">{title}</p>
+        <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">{heading}</p>
         {icon && (
           <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center shrink-0', colorStyles[color])}>
             {React.isValidElement(icon)
@@ -58,7 +66,7 @@ export function StatCard({
         <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-neutral-900">{value}</span>
       </div>
 
-      {(trend != null || subtitle) && (
+      {(trend != null || description) && (
         <div className="mt-2.5 flex items-center gap-2 text-xs">
           {trend != null && (
             <span
@@ -77,7 +85,7 @@ export function StatCard({
               {trend}
             </span>
           )}
-          {subtitle && <span className="text-neutral-500 truncate">{subtitle}</span>}
+          {description && <span className="text-neutral-500 truncate">{description}</span>}
         </div>
       )}
     </div>

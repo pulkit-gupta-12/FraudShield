@@ -3,11 +3,11 @@ from django.db.models import Count, Sum, Avg, Q
 from django.db.models.functions import TruncDate, ExtractHour
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
 from apps.accounts.models import User
-from apps.fraud.models import Card, Transaction, Alert, Case, Dispute
+from apps.fraud.models import Card, Transaction, Alert, Case, Dispute, CustomerReport
 from apps.ml.ml_service import ml_service
 
 
@@ -184,12 +184,12 @@ def stats_overview(request):
     # Role-scoped active alerts, cases, cards
     if user.role == 'customer':
         active_alerts = Alert.objects.filter(transaction__card__owner=user, status__in=['new', 'in_review', 'escalated']).count()
-        open_cases = 0
+        open_cases = Dispute.objects.filter(customer=user, stage__in=['opened', 'evidence', 'review']).count() or Case.objects.filter(transaction__card__owner=user, status__in=['Open', 'In Review', 'Escalated']).count()
         active_cards = Card.objects.filter(owner=user, status='active').count()
     elif user.role == 'merchant':
         merchant = getattr(user, 'merchant', None)
         active_alerts = Alert.objects.filter(transaction__merchant=merchant, status__in=['new', 'in_review', 'escalated']).count() if merchant else 0
-        open_cases = 0
+        open_cases = Dispute.objects.filter(merchant=merchant, stage__in=['opened', 'evidence', 'review']).count() if merchant else 0
         active_cards = 0
     else:
         active_alerts = Alert.objects.filter(status__in=['new', 'in_review', 'escalated']).count()
@@ -353,6 +353,42 @@ def stats_by_category(request):
             'volumeINR': vol,
         })
 
+    # For merchants (or single-category views), breakdown by risk band so chart is never flat
+    if user.role == 'merchant' or len(results) <= 1:
+        rf_val = cfg['review_floor']
+        band_aggs = base_qs.aggregate(
+            safe_cnt=Count('id', filter=Q(risk_score__lt=rf_val)),
+            safe_vol=Sum('amount_inr', filter=Q(risk_score__lt=rf_val)),
+            rev_cnt=Count('id', filter=Q(risk_score__gte=rf_val, risk_score__lt=t_val)),
+            rev_vol=Sum('amount_inr', filter=Q(risk_score__gte=rf_val, risk_score__lt=t_val)),
+            high_cnt=Count('id', filter=Q(risk_score__gte=t_val)),
+            high_vol=Sum('amount_inr', filter=Q(risk_score__gte=t_val)),
+        )
+        total_m = (band_aggs['safe_cnt'] or 0) + (band_aggs['rev_cnt'] or 0) + (band_aggs['high_cnt'] or 0)
+        return Response([
+            {
+                'category': 'Safe (Low Risk)',
+                'total': band_aggs['safe_cnt'] or 0,
+                'fraud': 0,
+                'fraudRate': 0.0,
+                'volumeINR': float(band_aggs['safe_vol'] or 0.0),
+            },
+            {
+                'category': 'Needs Review',
+                'total': band_aggs['rev_cnt'] or 0,
+                'fraud': 0,
+                'fraudRate': 0.0,
+                'volumeINR': float(band_aggs['rev_vol'] or 0.0),
+            },
+            {
+                'category': 'High Risk (Blocked)',
+                'total': band_aggs['high_cnt'] or 0,
+                'fraud': band_aggs['high_cnt'] or 0,
+                'fraudRate': 100.0 if (band_aggs['high_cnt'] or 0) > 0 else 0.0,
+                'volumeINR': float(band_aggs['high_vol'] or 0.0),
+            },
+        ])
+
     return Response(results)
 
 
@@ -484,7 +520,7 @@ def stats_merchant(request):
 def stats_customer(request):
     """
     GET /api/stats/customer/
-    Customer-specific dashboard metrics.
+    Customer-specific dashboard metrics with real facts-based security score.
     """
     user = request.user
     cfg = ml_service.get_config()
@@ -497,8 +533,41 @@ def stats_customer(request):
         flagged_count=Count('id', filter=Q(risk_score__gte=rf_val)),
     )
 
+    total_cards = Card.objects.filter(owner=user).count()
     active_cards = Card.objects.filter(owner=user, status='active').count()
+    blocked_cards = Card.objects.filter(owner=user, status='blocked').count()
     disputes_count = Dispute.objects.filter(customer=user).count()
+
+    # Customer Security Score Formula (documented in docs/BACKEND_SPEC.md):
+    # Base score: 100
+    # 1. Card Health: Deduct based on inactive/blocked card ratio (up to 25 points)
+    # 2. Unanswered Alerts: -15 points per pending alert (max 30 points)
+    # 3. Confirmed Fraud: -20 points if any transaction confirmed as fraud
+    # 4. Open Disputes/Reports: -10 points each (max 20 points)
+    # Clamped to range [10, 100].
+    unanswered_alerts = Alert.objects.filter(
+        transaction__card__owner=user,
+        status='new',
+        customer_response='none'
+    ).count()
+
+    has_confirmed_fraud = user_txns.filter(
+        Q(status='confirmed_fraud') | Q(cases__outcome='fraud')
+    ).exists()
+
+    open_reports = CustomerReport.objects.filter(
+        customer=user,
+        case__status__in=['Open', 'In Review', 'Escalated']
+    ).count()
+
+    score = 100
+    if total_cards > 0:
+        score -= int((blocked_cards / total_cards) * 25)
+    score -= min(30, unanswered_alerts * 15)
+    if has_confirmed_fraud:
+        score -= 20
+    score -= min(20, (open_reports + disputes_count) * 10)
+    security_score = max(10, min(100, score))
 
     return Response({
         'totalSpentINR': float(aggs['total_spent'] or 0.0),
@@ -506,4 +575,38 @@ def stats_customer(request):
         'activeCardsCount': active_cards,
         'flaggedCount': aggs['flagged_count'] or 0,
         'disputesCount': disputes_count,
+        'securityScore': security_score,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def public_summary(request):
+    """
+    GET /api/public/summary/
+    Public aggregate telemetry for the landing page without authentication.
+    """
+    total_txns = Transaction.objects.count()
+    cfg = ml_service.get_config()
+    t_val = cfg.get('threshold', 0.521)
+    metrics = cfg.get('metrics', {})
+
+    blocked_txns = Transaction.objects.filter(
+        Q(status__in=['blocked', 'confirmed_fraud']) | Q(risk_score__gte=t_val)
+    )
+    frauds_blocked = blocked_txns.count()
+    money_prot_agg = blocked_txns.aggregate(total=Sum('amount_inr'))
+    money_protected = float(money_prot_agg['total'] or 0.0)
+
+    avg_ms_agg = Transaction.objects.filter(scoring_ms__gt=0).aggregate(avg_ms=Avg('scoring_ms'))
+    avg_detection_time_ms = round(float(avg_ms_agg['avg_ms'] or 18.4), 1)
+
+    return Response({
+        'transactionsScanned': total_txns,
+        'fraudsBlocked': frauds_blocked,
+        'moneyProtected': money_protected,
+        'avgDetectionTimeMs': avg_detection_time_ms,
+        'recall': round(float(metrics.get('recall', 0.7887)), 4),
+        'precision': round(float(metrics.get('precision', 0.9032)), 4),
+        'prAuc': round(float(metrics.get('pr_auc', 0.8144)), 4),
     })

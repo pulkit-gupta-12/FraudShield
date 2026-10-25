@@ -220,3 +220,25 @@ export async function getAnalystStats() {
     }
   })
 }
+
+// ─── Public Summary (Landing Page) ──────────────────────────────────────────
+
+/**
+ * GET /api/public/summary/
+ * Unauthenticated system totals and model metrics for public landing page.
+ */
+export async function getPublicSummary() {
+  if (!USE_MOCK) {
+    const { data } = await apiClient.get('/public/summary/')
+    return data
+  }
+  return {
+    transactionsScanned: 6000,
+    fraudsBlocked: 127,
+    moneyProtected: 492040.5,
+    avgDetectionTimeMs: 18.2,
+    precision: 1.0,
+    recall: 0.7938,
+    prAuc: 0.8144,
+  }
+}

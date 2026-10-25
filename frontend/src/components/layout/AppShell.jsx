@@ -11,7 +11,6 @@ const ROUTE_TITLES = {
   '/403': 'Access Denied — FraudShield',
   '/unauthorized': 'Access Denied — FraudShield',
   '/404': 'Page Not Found — FraudShield',
-  '/ui-kit': 'Design System & Component UI Kit — FraudShield',
   '/admin/dashboard': 'Admin Dashboard — FraudShield',
   '/admin/users': 'User Management & RBAC — FraudShield',
   '/admin/config': 'System Config & Thresholds — FraudShield',

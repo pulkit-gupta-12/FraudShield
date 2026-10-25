@@ -142,47 +142,104 @@ All test accounts are pre-configured with secure credentials. You can click the 
 
 | Role | Demo Email | Password | Landing Route | Key Responsibilities & Capabilities |
 | :--- | :--- | :--- | :--- | :--- |
-| **Admin** | `admin@fraudshield.io` | `Admin@123` | `/admin/dashboard` | System-wide fraud KPIs, user management (RBAC), threshold slider tuning, CSV audit log export |
-| **Analyst** | `analyst@fraudshield.io` | `Analyst@123` | `/analyst/dashboard` | Live fraud queue, Case investigation triage, SHAP factor analysis, batch CSV scoring, model panel |
-| **Customer** | `customer@fraudshield.io` | `Customer@123` | `/customer/overview` | Personal card management, instant block/unblock, interactive alert responses ("No, not me") |
-| **Merchant** | `merchant@fraudshield.io` | `Merchant@123` | `/merchant/overview` | Transaction settlement velocity, chargeback dispute defense, multipart PDF/PNG evidence upload |
+| **Admin** | `admin@fraudshield.io` | `password123` / `Admin@123` | `/admin/dashboard` | System-wide fraud KPIs, user management (RBAC), threshold slider tuning, CSV audit log export |
+| **Analyst** | `analyst@fraudshield.io` | `password123` / `Analyst@123` | `/analyst/dashboard` | Live fraud queue, Case investigation triage, SHAP factor analysis, batch CSV scoring, model panel |
+| **Customer** | `customer@fraudshield.io` | `password123` / `Customer@123` | `/customer/overview` | Personal card management, instant block/unblock, interactive alert responses ("No, not me") |
+| **Merchant** | `merchant@fraudshield.io` | `password123` / `Merchant@123` | `/merchant/overview` | Transaction settlement velocity, chargeback dispute defense, multipart PDF/PNG evidence upload |
 
-*(Note: Demo logins with `@fraudshield.com` are also supported).*
+*(Note: Demo logins with `@fraudshield.com` aliases are also supported).*
 
 ---
 
-## 5-Minute Interactive Demo Script
+## Demo Data Modes
 
-Follow this guided walkthrough to experience the entire lifecycle of fraud prevention:
+FraudShield provides flexible database seeding modes via `python manage.py seed_data`:
 
-### 1. The Alert & Card Defense (Customer Persona)
-1. Log in as **Customer** (`customer@fraudshield.io` / `Customer@123`).
-2. Navigate to **Alerts** (`/customer/alerts`). Look for an active flagged alert on your card.
-3. Click **"No, not me"** to flag fraudulent activity.
-4. When prompted by the instant defense dialog, click **"Block Card"**.
-5. Switch to **Cards** (`/customer/cards`) and confirm your card status immediately updated to `Blocked`.
+| Command / Flag | Purpose | Users | Transactions | Time | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `python manage.py seed_data --minimal` | Quick Smoke Test | 8 users | 50 txns | ~5s | Ultra-fast baseline seeding for quick automated tests, initial migrations, or manual verification. |
+| `python manage.py seed_data --reset --demo` | Full Presentation Demo | 44 users | 6,000 txns | ~75s | Rich, 60-day presentation history with diurnal rhythms, 20 benchmark spending patterns, cases across all 4 statuses (Open, In Review, Escalated, Resolved), customer reports, chargeback disputes with evidence PDFs/PNGs, audit logs, and notifications. **No screen section is empty, zero, or flat.** |
+| `python manage.py seed_data --clear-demo` | Safe Cleanup | - | - | <1s | Wipes only seeded demo data (`is_demo=True`), preserving real production accounts, newly registered users, and issued cards. |
 
-### 2. Investigation & Case Disposition (Analyst Persona)
-1. Log out and log in as **Analyst** (`analyst@fraudshield.io` / `Analyst@123`).
-2. Open the **Live Feed** (`/analyst/live-feed`) to see real transactions dynamically streaming in from the background simulator.
-3. Open **Investigate** (`/analyst/investigate`) or **Cases** (`/analyst/cases`).
-4. Select the escalated case triggered by the customer's response.
-5. Review the **XAI Factors** breakdown (e.g., unusual V14 anomaly, deviant transaction hour, out-of-pattern amount).
-6. Click **"Mark as Fraud"**, enter an analyst note (e.g., *"Confirmed unauthorized card compromise by customer"*), and submit.
-7. Notice the case timeline updates instantly with immutable event audit records.
+### Real vs Demo Data Guarantee
+- **Real ML Inference**: Every transaction seeded into the database is scored directly through the real `StandardScaler` and tuned `XGBoost` model (`ml/models/fraud_xgb_model.pkl`) using feature vectors extracted from `ml/data/test_sample.csv`. No artificial or random scores are fabricated.
+- **Data Protection (`is_demo=True`)**: All seeded presentation records are flagged with `is_demo=True`. When `--clear-demo` is executed, only presentation demo records are deleted; non-demo users, issued cards, and real transactions submitted via the payment form remain intact.
 
-### 3. Model What-If Analysis & Policy Tuning (Admin Persona)
-1. Log out and log in as **Admin** (`admin@fraudshield.io` / `Admin@123`).
-2. Go to **Config & Thresholds** (`/admin/config`).
-3. Move the **Decision Threshold Slider** from `0.521` to `0.400`.
-4. Observe the live **What-If Simulation** table update precision, recall, and false alarm rates against historical labeled transactions.
-5. Save the new threshold policy.
-6. Open **Audit Logs** (`/admin/audit-logs`) to verify the `THRESHOLDS_UPDATED` record capturing the old value, new value, admin user email, and client IP address.
+---
 
-### 4. Real Model Verification & Batch Upload (Transaction Checker)
-1. Open the **Transaction Checker** (`/checker`).
-2. Under **Batch Scoring**, upload `ml/data/test_sample.csv` (3,071 transactions).
-3. Confirm that the model scores all rows and reports exactly **56 Caught Frauds, 15 Missed Frauds, and 0 False Alarms**, matching the ground-truth test evaluation!
+## Real vs Demo System Boundaries
+
+FraudShield is designed to demonstrate authentic banking security and machine learning operations without synthetic smoke-and-mirrors:
+
+- **What is REAL:**
+  - **Scoring, logins, permissions, alerts, cases, disputes and notifications are real.**
+  - **The spending patterns are real anonymised rows from the test split** (the 28 PCA-transformed numerical features $V_1 \dots V_{28}$, time delta, and baseline transaction amounts extracted directly from the holdout dataset `ml/data/test_sample.csv`).
+  - **Dynamic model threshold policies and live what-if calibrations are real.**
+  - **Role-based multi-tenant database scoping and immutable audit logs are real.**
+- **What is NOT real:**
+  - **The payment network, email and SMS are not real** (payment rail gateway hooks and telecom delivery are simulated internally within the service layer).
+
+---
+
+## 5-Minute Interactive Demo Script (No Simulator Needed)
+
+Experience the complete fraud detection and dispute lifecycle using real inputs and live ML scoring—starting from a fresh database without needing pre-seeded transaction histories or background simulator workers:
+
+### 1. Customer Provisioning & Card Issuance (Admin Persona)
+1. Log in as **Admin** (`admin@fraudshield.io` / `Admin@123`) and navigate to **Users** (`/admin/users`).
+2. Click **"New User"**, create a customer (e.g. `priya.patel@example.com` / `Customer@123`).
+3. Navigate to **Cards** (`/admin/cards`), click **"Issue Card"**, assign it to the new customer with a credit limit of ₹100,000, and activate the card.
+
+### 2. Normal Spending Pattern & Instant Approval (Customer Persona)
+1. Log out and log in as the newly created **Customer**.
+2. Navigate to **Make a Payment** (`/customer/pay`).
+3. Select your active card, pick spending pattern **"P01 - Grocery & Everyday Essentials"**, and enter amount `₹1,200`.
+4. Click **"Submit Payment"**:
+   - The XGBoost model evaluates the 30 real feature inputs and outputs a safe score (e.g., `0.0001`).
+   - The payment is instantly **Approved**.
+   - Navigate to **Transactions** (`/customer/transactions`) and verify the transaction appears; check your **Dashboard** (`/customer/overview`) to see your monthly spent update to ₹1,200.
+
+### 3. High-Risk Fraud Pattern & Alert Trigger
+1. Return to **Make a Payment** (`/customer/pay`).
+2. Choose spending pattern **"P13 - High-Risk Anomalous Night Surge"** and enter `₹9,500`.
+3. Click **"Submit Payment"**:
+   - The real ML model scores the transaction at `1.0000` (well above the `0.521` threshold).
+   - The transaction is immediately **Blocked** (or flagged for **Review**).
+   - An instant high-risk alert badge appears in your header notification bell and on `/customer/alerts`.
+
+### 4. Alert Denial, Case Escalation & Card Defense
+1. Open **Alerts** (`/customer/alerts`) and click **"No, not me"** on the blocked transaction.
+2. Confirm the action to trigger immediate card protection.
+3. Switch persona by logging in as **Analyst** (`analyst@fraudshield.io` / `Analyst@123`):
+   - Open **Cases** (`/analyst/cases`) to inspect the escalated fraud case.
+   - Review the **XAI Factor Attribution** (extreme $V_{14}$, unusual transaction velocity, out-of-pattern amount).
+   - Click **"Mark as Fraud"**, enter an analyst note (*"Confirmed unauthorized card compromise by cardholder"*), and submit.
+4. Log back in as **Customer**:
+   - Verify your card status is now **Blocked** in `/customer/cards`.
+   - Attempt any payment on `/customer/pay`: the transaction is immediately **Declined** with reason `card_blocked` before even reaching the ML model.
+
+### 5. Merchant Terminal Sale & Live Polling (Merchant Persona)
+1. Log in as **Merchant** (`merchant@fraudshield.io` / `Merchant@123`).
+2. Navigate to **Terminal** (`/merchant/terminal`).
+3. Select a customer test card, pick pattern **"P02 - Electronic Store Purchase"**, enter `₹2,400`, and submit.
+4. Log in as that customer and open **Transactions** (`/customer/transactions`):
+   - Within 10 seconds, the new transaction appears in their personal feed via live polling.
+
+### 6. Dispute Resolution & Model Feedback Loop
+1. As the **Customer**, report an approved transaction in `/customer/transactions` selecting reason **"not_received"**.
+2. Log in as **Merchant** and go to **Disputes** (`/merchant/disputes`):
+   - Open the dispute, upload delivery evidence (`proof.pdf`), and advance the stage to **"Under Review"**.
+3. Log in as **Admin** and open **Disputes** (`/admin/disputes`):
+   - Adjudicate the dispute and set the final outcome to **"Customer Won"**.
+4. Open the **Admin Dashboard** (`/admin/dashboard`):
+   - Verify the **Model Feedback** tiles accurately reflect Confirmed Fraud, Missed Fraud, and False Alarms.
+   - The Analyst operational KPIs on `/analyst/dashboard` reconcile with the adjudicated cases.
+
+### 7. Dynamic Threshold Policy Tuning & Audit Trail
+1. As **Admin**, navigate to **Config & Thresholds** (`/admin/config`).
+2. Adjust the threshold slider (e.g., from `0.521` to `0.900`).
+3. Test a borderline pattern (such as `P18` with raw score `0.8054`): notice how the system decision flips from `Blocked` to `Review`.
+4. Open **Audit Logs** (`/admin/audit-logs`) to verify the immutable `THRESHOLDS_UPDATED` record capturing admin credentials, timestamp, and parameter changes.
 
 ---
 
@@ -248,6 +305,11 @@ While FraudShield is built to enterprise architectural standards, several practi
 
 FraudShield includes comprehensive contract verification and end-to-end integration test suites:
 
+- **12 End-to-End Scenarios Proof (S1–S12, Zero Simulator):**
+  ```bash
+  python -m pytest backend/tests/e2e/test_scenarios.py -s -v
+  # Result: 12 passed in ~41s with 100% SUCCESS! (See PROOF.md)
+  ```
 - **API Contract Verification:**
   ```bash
   python backend/scripts/contract_check.py
@@ -266,5 +328,5 @@ FraudShield includes comprehensive contract verification and end-to-end integrat
 - **Frontend Production Bundle:**
   ```bash
   cd frontend && npm run build
-  # Result: Built dist/ in 2.21s with zero errors
+  # Result: Built dist/ in ~28s with zero errors
   ```

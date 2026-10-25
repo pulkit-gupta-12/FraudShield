@@ -120,9 +120,21 @@ DISPUTES  GET /api/disputes/   GET /api/disputes/{id}/   POST /api/disputes/{id}
 NOTIFICATIONS (own only)  GET /api/notifications/?since= (adds unreadCount, supports since polling)   PATCH /api/notifications/{id}/ {isRead}   POST /api/notifications/read-all/
 MODEL  GET /api/model/info/ (admin, analyst, merchant)   GET /api/model/what-if/?threshold=<val> (admin; threshold defaults to active ModelConfig.threshold if omitted; computed from stored transactions with true_label: flagged, caught, falseAlarms, precision, recall)   PUT /api/model/threshold/ {threshold, reviewFloor optional} (admin; threshold 0.05 to 0.99, reviewFloor 0.1 up to the threshold; writes an audit log)
 STATS (role-scoped, param range=7d|30d|90d)  GET /api/stats/overview/ | timeseries/ | by-hour/ | by-category/ | risk-distribution/ | analyst/ | merchant/ | customer/
+PUBLIC SUMMARY  GET /api/public/summary/ (unauthenticated public telemetry: transactionsScanned, fraudsBlocked, moneyProtected, avgDetectionTimeMs, recall, precision, prAuc)
+
+### Customer Security Score Formula
+Computed dynamically in `GET /api/stats/customer/` from real user facts without simulation:
+- **Base Score**: 100
+- **Card Health**: Deducts up to 25 points based on the fraction of blocked/compromised cards: `int((blocked_cards / total_cards) * 25)`
+- **Unanswered Alerts**: -15 points for each pending alert with no cardholder confirmation (`status='new'`), capped at 30 points.
+- **Confirmed Fraud**: -20 points if any transaction on the customer's card was determined to be confirmed fraud.
+- **Open Disputes & Reports**: -10 points for each unresolved dispute or open investigation report, capped at 20 points.
+- **Clamping**: Score is strictly bound between [10, 100].
+
 REPORTS  GET /api/reports/?type=&dateFrom=&dateTo=&format=json|csv (admin types: daily_summary, fraud_by_category, analyst_performance, model_performance; merchant types: merchant_summary, merchant_chargebacks)
 AUDIT  GET /api/audit-logs/ (admin; filters user, action, dateFrom, dateTo; ?format=csv)
 HEALTH  GET /api/health/ (public) -> {status, modelLoaded, modelVersion}
+
 
 ## Security rules (non-negotiable)
 1. All secrets and settings come from environment variables (.env, never committed). DEBUG=False by default. Explicit ALLOWED_HOSTS. CORS allows only the frontend origin from env.

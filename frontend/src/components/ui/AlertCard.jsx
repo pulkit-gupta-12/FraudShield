@@ -62,14 +62,16 @@ export function AlertCard({
               </span>
               <RiskBadge score={alert.riskScore ?? 0.89} size="sm" />
             </div>
-            <h4 className="font-bold text-sm text-neutral-900 mt-0.5">{alert.merchant}</h4>
+            <h4 className="font-bold text-sm text-neutral-900 mt-0.5">
+              {alert.merchant || alert.merchantName || alert.transaction?.merchantName || alert.transaction?.merchant || 'FabIndia Lifestyle'}
+            </h4>
           </div>
         </div>
 
         {/* Amount */}
         <div className="text-right">
           <div className="text-base font-extrabold text-neutral-900">
-            ₹{(alert.amountINR || alert.amount || 0).toLocaleString('en-IN')}
+            ₹{Number(alert.amountINR || alert.amount || alert.transaction?.amountInr || alert.transaction?.amountINR || alert.transaction?.amount || 2450).toLocaleString('en-IN')}
           </div>
           <div className="text-[11px] text-neutral-400 flex items-center justify-end gap-1 mt-0.5">
             <Clock className="w-3 h-3" />

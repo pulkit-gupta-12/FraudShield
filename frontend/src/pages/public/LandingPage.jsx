@@ -17,11 +17,26 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { getLiveTransactions, resetLiveFeed } from '../../services/transactions.js'
+import { getPublicSummary } from '../../services/stats.js'
 import { RiskBadge } from '../../components/ui/RiskBadge.jsx'
 
 export function LandingPage() {
   const [liveTxns, setLiveTxns] = useState([])
   const [activePersona, setActivePersona] = useState('customer')
+  const [summary, setSummary] = useState(null)
+
+  // Load public metrics from /api/public/summary/
+  useEffect(() => {
+    let isMounted = true
+    getPublicSummary()
+      .then((data) => {
+        if (isMounted && data) setSummary(data)
+      })
+      .catch(() => {})
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   // Live feed poller from services/transactions.js (DATA RULE #3)
   useEffect(() => {
@@ -85,12 +100,6 @@ export function LandingPage() {
             Launch Interactive Demo
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </Link>
-          <Link
-            to="/ui-kit"
-            className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-white hover:bg-neutral-50 border border-neutral-300 text-neutral-700 font-semibold text-base shadow-xs transition-colors flex items-center justify-center gap-2"
-          >
-            Explore Design System
-          </Link>
         </div>
       </section>
 
@@ -99,31 +108,31 @@ export function LandingPage() {
         <div className="bg-white rounded-2xl border border-neutral-200 shadow-sm p-6 sm:p-8 grid grid-cols-2 sm:grid-cols-4 gap-6 text-center divide-y sm:divide-y-0 sm:divide-x divide-neutral-100">
           <div className="pt-4 sm:pt-0">
             <p className="text-3xl sm:text-4xl font-extrabold text-neutral-900 tracking-tight font-mono">
-              284,807
+              {summary?.transactionsScanned ? summary.transactionsScanned.toLocaleString() : '6,000+'}
             </p>
             <p className="text-xs text-neutral-500 font-semibold uppercase tracking-wider mt-1">
-              Dataset Records
+              Transactions Scanned
             </p>
           </div>
           <div className="pt-4 sm:pt-0">
             <p className="text-3xl sm:text-4xl font-extrabold text-emerald-600 tracking-tight font-mono">
-              ₹4.8 Cr+
+              {summary?.moneyProtected ? `₹${Math.round(summary.moneyProtected).toLocaleString()}` : '₹4.9 Lakh+'}
             </p>
             <p className="text-xs text-neutral-500 font-semibold uppercase tracking-wider mt-1">
-              Simulated Saved
+              Money Protected
             </p>
           </div>
           <div className="pt-4 sm:pt-0">
             <p className="text-3xl sm:text-4xl font-extrabold text-primary-600 tracking-tight font-mono">
-              99.94%
+              {summary?.precision != null ? `${(summary.precision * 100).toFixed(1)}%` : '100%'}
             </p>
             <p className="text-xs text-neutral-500 font-semibold uppercase tracking-wider mt-1">
-              XGBoost Accuracy
+              Model Precision
             </p>
           </div>
           <div className="pt-4 sm:pt-0">
             <p className="text-3xl sm:text-4xl font-extrabold text-indigo-600 tracking-tight font-mono">
-              18 ms
+              {summary?.avgDetectionTimeMs ? `${Math.round(summary.avgDetectionTimeMs)} ms` : '18 ms'}
             </p>
             <p className="text-xs text-neutral-500 font-semibold uppercase tracking-wider mt-1">
               Inference Latency

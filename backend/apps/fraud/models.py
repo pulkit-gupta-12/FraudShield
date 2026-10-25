@@ -7,6 +7,7 @@ class Merchant(models.Model):
     category = models.CharField(max_length=100, default='General')
     city = models.CharField(max_length=100, default='Mumbai')
     active = models.BooleanField(default=True)
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -27,6 +28,7 @@ class Card(models.Model):
     spending_limit = models.DecimalField(max_digits=12, decimal_places=2, default=150000.00)
     travel_notice = models.BooleanField(default=False)
     expiry = models.CharField(max_length=10, default='12/28')
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -60,6 +62,7 @@ class Transaction(models.Model):
     factors = models.JSONField(default=list, blank=True)
     model_version = models.CharField(max_length=50, default='v1.2.0-xgb')
     source = models.CharField(max_length=50, default='seed')
+    is_demo = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         indexes = [
@@ -171,6 +174,7 @@ class Alert(models.Model):
         related_name='assigned_alerts'
     )
     customer_response = models.CharField(max_length=50, choices=CUSTOMER_RESPONSE_CHOICES, default='none')
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
 
@@ -216,6 +220,7 @@ class Case(models.Model):
         related_name='assigned_cases'
     )
     source = models.CharField(max_length=50, default='system')
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     closed_at = models.DateTimeField(null=True, blank=True)
@@ -233,6 +238,7 @@ class CaseNote(models.Model):
     case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name='notes')
     author = models.CharField(max_length=255, default='Analyst')
     text = models.TextField()
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -245,6 +251,7 @@ class CaseEvent(models.Model):
     action = models.CharField(max_length=255)
     text = models.TextField(blank=True, default='')
     actor = models.CharField(max_length=255, default='System')
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -274,6 +281,7 @@ class Dispute(models.Model):
     status = models.CharField(max_length=50, default='Submitted')
     outcome = models.CharField(max_length=50, blank=True, default='')
     evidence_notes = models.TextField(blank=True, default='')
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -285,6 +293,7 @@ class DisputeEvidence(models.Model):
     file = models.FileField(upload_to='evidence/%Y/%m/%d/')
     original_name = models.CharField(max_length=255)
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -298,6 +307,7 @@ class Notification(models.Model):
     body = models.TextField()
     link = models.CharField(max_length=255, blank=True, default='')
     is_read = models.BooleanField(default=False)
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -350,6 +360,7 @@ class CustomerReport(models.Model):
     note = models.TextField(max_length=500)
     case = models.ForeignKey(Case, null=True, blank=True, on_delete=models.SET_NULL, related_name='customer_reports')
     dispute = models.ForeignKey(Dispute, null=True, blank=True, on_delete=models.SET_NULL, related_name='customer_reports')
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

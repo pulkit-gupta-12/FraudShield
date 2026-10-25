@@ -91,9 +91,16 @@ apiClient.interceptors.response.use(
 
       _isRefreshing = true
       const refreshToken = getRefreshToken()
+      const accessToken = getAccessToken()
+
+      if (!refreshToken && !accessToken) {
+        // Unauthenticated request in public view: do not trigger logout or redirect
+        _isRefreshing = false
+        return Promise.reject(normaliseError(error))
+      }
 
       if (!refreshToken) {
-        // No refresh token – log out immediately
+        // Active session had no refresh token – log out
         _doLogout()
         _isRefreshing = false
         return Promise.reject(normaliseError(error))
@@ -123,12 +130,26 @@ apiClient.interceptors.response.use(
 
 // ── Logout helper (no circular dep on AuthContext) ──────────────────────────
 
+let _logoutTimeout = null
+
 function _doLogout() {
   clearTokens()
-  // Use a brief timeout so the current call stack completes cleanly
-  setTimeout(() => {
-    window.location.href = '/login'
-  }, 0)
+  if (typeof window === 'undefined') return
+
+  const path = window.location.pathname
+  // Never reload or force redirect if user is already on public/login pages
+  if (path === '/login' || path === '/' || path.startsWith('/register') || path.startsWith('/checker')) {
+    return
+  }
+
+  if (!_logoutTimeout) {
+    _logoutTimeout = setTimeout(() => {
+      _logoutTimeout = null
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }, 150)
+  }
 }
 
 // ── Error normaliser ─────────────────────────────────────────────────────────

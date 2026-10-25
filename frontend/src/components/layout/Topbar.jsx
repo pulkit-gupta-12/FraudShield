@@ -35,6 +35,7 @@ export function Topbar({ onMenuClick }) {
   // Notifications
   const [notifications, setNotifications] = useState([])
   const [showNotifications, setShowNotifications] = useState(false)
+  const [showUserMenu, setShowUserMenu] = useState(false)
   const notifRef = useRef(null)
   const userRef = useRef(null)
   const lastKnownNotifIds = useRef(new Set())
@@ -398,15 +399,6 @@ export function Topbar({ onMenuClick }) {
               >
                 <User className="w-3.5 h-3.5 text-neutral-400" />
                 Profile & Security
-              </Link>
-
-              <Link
-                to="/ui-kit"
-                onClick={() => setShowUserMenu(false)}
-                className="flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-700 hover:bg-neutral-100 transition"
-              >
-                <Layers className="w-3.5 h-3.5 text-primary-500" />
-                Component UI Kit
               </Link>
 
               <div className="border-t border-neutral-100 my-1"></div>

@@ -98,18 +98,12 @@ export function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) 
 
       {/* Bottom Section */}
       <div className="p-3 border-t border-neutral-100 space-y-1">
-        {/* Link to UI Kit */}
-        <Link
-          to="/ui-kit"
-          onClick={() => setMobileOpen && setMobileOpen(false)}
-          className={`flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition ${
-            collapsed ? 'justify-center px-0' : ''
-          }`}
-          title={collapsed ? 'Component UI Kit' : undefined}
-        >
-          <Layers className="w-4 h-4 text-primary-500 shrink-0" />
-          {!collapsed && <span>Component UI Kit</span>}
-        </Link>
+        {/* Admin Demo History Footnote */}
+        {!collapsed && user?.role === 'admin' && (
+          <div className="px-2 py-1.5 text-[10px] text-neutral-400 bg-neutral-50 rounded border border-neutral-100 leading-tight">
+            Demo history: 6,000 real-scored transactions across 60 days. Run <code className="text-neutral-600 font-mono">python manage.py seed_data --help</code> for options.
+          </div>
+        )}
 
         {/* User Card & Logout */}
         {!collapsed && user && (

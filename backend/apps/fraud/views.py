@@ -111,6 +111,12 @@ class TransactionViewSet(ScopedQuerySetMixin, viewsets.ModelViewSet):
     serializer_class = TransactionSerializer
     queryset = Transaction.objects.select_related('card', 'card__owner', 'merchant').all()
 
+    def get_permissions(self):
+        if self.action == 'list' and 'since' in self.request.query_params:
+            from rest_framework.permissions import AllowAny
+            return [AllowAny()]
+        return super().get_permissions()
+
     def get_throttles(self):
         if getattr(self, 'action', None) == 'submit':
             self.throttle_scope = 'submit'

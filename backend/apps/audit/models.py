@@ -16,6 +16,7 @@ class AuditLog(models.Model):
     ip_address = models.CharField(max_length=100, blank=True, default='127.0.0.1')
     status = models.CharField(max_length=50, default='SUCCESS')
     details = models.JSONField(default=dict, blank=True)
+    is_demo = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -55,5 +56,6 @@ def audit(user=None, action="", target="", ip=None, details=None, status="SUCCES
         target=target,
         ip_address=ip_str,
         status=status,
-        details=details
+        details=details,
+        is_demo=False
     )

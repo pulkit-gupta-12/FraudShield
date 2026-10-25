@@ -19,12 +19,6 @@ export function LoginPage() {
   const [errorType, setErrorType] = useState('general') // 'general' | 'pending' | 'disabled' | 'throttled'
   const [validationErrors, setValidationErrors] = useState({})
 
-  useEffect(() => {
-    if (user) {
-      navigate(from || getRoleDashboardPath(user.role), { replace: true })
-    }
-  }, [user, navigate, from])
-
   // Form field validation
   const validateForm = () => {
     const errors = {}
@@ -121,6 +115,24 @@ export function LoginPage() {
           Real-time AI-powered financial fraud detection & operations
         </p>
       </div>
+
+      {/* If currently signed in, show status banner */}
+      {user && (
+        <div className="mb-5 p-3 rounded-xl bg-primary-50 border border-primary-200 text-xs flex items-center justify-between">
+          <div>
+            <p className="font-semibold text-neutral-800">
+              Active account: <span className="text-primary-700 font-bold">{user.name}</span> ({user.role})
+            </p>
+            <p className="text-[11px] text-neutral-500">Pick any demo account below to switch roles.</p>
+          </div>
+          <Link
+            to={from || getRoleDashboardPath(user.role)}
+            className="px-2.5 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white font-semibold text-xs shadow-xs transition shrink-0 ml-2"
+          >
+            Go to Hub &rarr;
+          </Link>
+        </div>
+      )}
 
       {/* Quick Demo Persona Chips */}
       <div className="mb-6 bg-neutral-50 p-3.5 rounded-xl border border-neutral-200">

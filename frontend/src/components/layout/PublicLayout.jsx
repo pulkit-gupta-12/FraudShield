@@ -1,9 +1,11 @@
 import React from 'react'
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { ShieldCheck, LogIn, LayoutGrid, Github } from 'lucide-react'
+import { ShieldCheck, LogIn, LayoutDashboard } from 'lucide-react'
+import { useAuth, getRoleDashboardPath } from '../../context/AuthContext.jsx'
 
 export function PublicLayout() {
   const location = useLocation()
+  const { user } = useAuth()
 
   return (
     <div className="min-h-screen flex flex-col bg-neutral-50 text-neutral-900">
@@ -20,13 +22,15 @@ export function PublicLayout() {
           </Link>
 
           <nav className="flex items-center gap-3">
-            <Link
-              to="/ui-kit"
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100 transition flex items-center gap-1.5"
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              UI Kit
-            </Link>
+            {user && (
+              <Link
+                to={getRoleDashboardPath(user.role)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-primary-700 bg-primary-50 border border-primary-200 hover:bg-primary-100 transition flex items-center gap-1.5"
+              >
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                Go to Dashboard
+              </Link>
+            )}
 
             {location.pathname !== '/login' && (
               <Link
@@ -34,7 +38,7 @@ export function PublicLayout() {
                 className="px-4 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs font-semibold shadow-xs transition flex items-center gap-1.5"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                Sign In
+                {user ? 'Switch Demo User' : 'Sign In'}
               </Link>
             )}
             {location.pathname === '/login' && (
@@ -64,7 +68,6 @@ export function PublicLayout() {
             <span>FraudShield AI Platform &copy; 2026. Real-Time Detection System.</span>
           </div>
           <div className="flex items-center gap-6">
-            <Link to="/ui-kit" className="hover:text-neutral-900 transition font-medium">UI Components</Link>
             <Link to="/login" className="hover:text-neutral-900 transition font-medium">Demo Portals</Link>
             <span className="text-neutral-400">v0.1.0-alpha</span>
           </div>

@@ -302,34 +302,42 @@ export function MyTransactionsPage() {
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
+          title="Total Activity"
           label="Total Activity"
           value={totalCount}
+          subtitle="Processed charges"
           subtext="Processed charges"
           icon={Receipt}
           loading={loading && transactions.length === 0}
         />
         <StatCard
+          title="Confirmed Legit"
           label="Confirmed Legit"
           value={stats?.legitCount !== undefined ? stats.legitCount : totalCount}
+          subtitle="Safe authorisations"
           subtext="Safe authorisations"
           icon={CheckCircle2}
           color="safe"
           loading={statsLoading}
         />
         <StatCard
+          title="Flagged for Review"
           label="Flagged for Review"
           value={stats?.suspiciousCount !== undefined ? stats.suspiciousCount : 0}
+          subtitle="Step-up / Held alerts"
           subtext="Step-up / Held alerts"
           icon={AlertTriangle}
-          color="warning"
+          color="review"
           loading={statsLoading}
         />
         <StatCard
+          title="Blocked by Shield"
           label="Blocked by Shield"
           value={stats?.fraudCount !== undefined ? stats.fraudCount : 0}
+          subtitle="High-risk intercepts"
           subtext="High-risk intercepts"
           icon={ShieldAlert}
-          color="danger"
+          color="risk"
           loading={statsLoading}
         />
       </div>

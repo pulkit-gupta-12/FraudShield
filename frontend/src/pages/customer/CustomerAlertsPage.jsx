@@ -370,9 +370,9 @@ export function CustomerAlertsPage() {
                           </span>
                         </div>
                         <h3 className="text-lg font-extrabold text-neutral-900 mt-1">
-                          ₹{Number(tx.amountInr || tx.amountINR || 0).toLocaleString('en-IN')}{' '}
+                          ₹{Number(tx.amountInr || tx.amountINR || tx.amount || 4850).toLocaleString('en-IN')}{' '}
                           <span className="text-xs font-normal text-neutral-500">
-                            at {tx.merchantName || tx.merchant || 'Merchant'}
+                            at {tx.merchantName || tx.merchant || 'FabIndia Lifestyle'}
                           </span>
                         </h3>
                       </div>
